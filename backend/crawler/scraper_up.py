@@ -1,20 +1,27 @@
-import asyncio
 import json
 import logging
 from typing import Optional
+from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
+from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
 
 async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
-    """爬取 UP 主基本信息（API 优先，页面降级）"""
+    """爬取 UP 主基本信息（WBI 签名 API）"""
     result = {"uid": uid}
     await random_delay()
     try:
-        api_url = f"https://api.bilibili.com/x/space/wbi/acc/info?mid={uid}"
+        mixin_key = await get_mixin_key(page)
+        if not mixin_key:
+            logger.warning("WBI mixin_key 为空，跳过签名")
+            return result
+        params = sign_params({"mid": uid}, mixin_key)
+        query_string = urlencode(params)
+        api_url = f"https://api.bilibili.com/x/space/wbi/acc/info?{query_string}"
         response = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if response and response.ok:
             body_text = await page.evaluate("() => document.body.innerText")
@@ -39,20 +46,10 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                         var m = document.title.match(/^(.+?)的个人空间/);
                         if (m) r.name = m[1].trim();
                     }
-                    var stats = document.querySelector('.nav-statistics, [class*="statistics"]');
-                    if (stats) {
-                        var lines = (stats.innerText||'').split(/\\r?\\n/);
-                        for (var i = 0; i < lines.length - 1; i++) {
-                            var origTxt = lines[i+1] || '';
-                            var val = parseFloat(origTxt.replace(/[^0-9.]/g,'')) || 0;
-                            if (lines[i].indexOf('粉丝')>=0)
-                                r.follower = origTxt.indexOf('万')>=0 ? Math.round(val*10000) : val;
-                        }
-                    }
-                    var nav = document.querySelector('.n-tab-links, [class*="tab-links"]');
+                    var nav = document.querySelector('.n-tab-links, [class*="tab-links"], .tab-container');
                     if (nav) {
                         var nt = nav.innerText || '';
-                        var nm = nt.match(/投稿\s*([\d.]+万?\+?)/);
+                        var nm = nt.match(/投稿\\s*([\\d.]+万?\\+?)/);
                         if (nm) {
                             var ns = nm[1];
                             if (ns === '999+') r.videos = 999;
@@ -75,84 +72,37 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
 
 
 async def scrape_up_videos(page: Page, uid: str, max_pages: int = 3) -> list[dict]:
-    """爬取 UP 主的视频列表（点击投稿tab方式）"""
+    """爬取 UP 主的视频列表（WBI 签名 API 分页）"""
     videos = []
     await random_delay()
     try:
-        url = f"https://space.bilibili.com/{uid}"
-        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
-        if not resp or not resp.ok:
+        mixin_key = await get_mixin_key(page)
+        if not mixin_key:
+            logger.warning("WBI mixin_key 为空，跳过视频列表获取")
             return videos
-        await page.wait_for_timeout(1500)
-
-        # 点击投稿 tab
-        clicked = await page.evaluate("""() => {
-            var all = document.querySelectorAll('*');
-            for (var i = 0; i < all.length; i++) {
-                if ((all[i].textContent||'').trim() === '投稿') { all[i].click(); return true; }
-            }
-            return false;
-        }""")
-        if not clicked:
-            return videos
-        await asyncio.sleep(3)
 
         for pn in range(1, max_pages + 1):
             if pn > 1:
                 await random_delay()
-                clicked_next = await page.evaluate("""() => {
-                    var btns = document.querySelectorAll('.be-pager-next, .next, [class*="pager-next"], button');
-                    for (var i = 0; i < btns.length; i++) {
-                        if ((btns[i].textContent||'').trim()==='下一页') { btns[i].click(); return true; }
-                    }
-                    return false;
-                }""")
-                if not clicked_next: break
-                await asyncio.sleep(2)
-
-            await page.wait_for_timeout(1000)
-
-            page_videos = await page.evaluate("""
-                function() {
-                    var seen={}, result=[];
-                    document.querySelectorAll('a[href*="BV"]').forEach(function(a){
-                        var m = (a.getAttribute('href')||'').match(/(BV[a-zA-Z0-9]+)/);
-                        if (!m || seen[m[1]]) return;
-                        seen[m[1]] = true;
-                        var bvid = m[1], title = '', play = 0;
-                        var card = a.closest('.bili-video-card, li, .small-item, [class*="video-card"]');
-                        if (!card) { var el = a; for (var up=0;up<3;up++) { if (el.parentElement) el = el.parentElement; } card = el; }
-
-                        var titleEl = card.querySelector('.bili-video-card__title, .title, [class*="title"]');
-                        if (titleEl) title = (titleEl.getAttribute('title')||titleEl.textContent||'').trim();
-                        if (!title) {
-                            var t2 = (card?card.innerText:a.innerText)||'';
-                            var lines = t2.split(/[\\n\\r]+/).map(function(s){return s.trim()}).filter(function(s){return s.length>0});
-                            for (var i = lines.length-1; i >= 0; i--) {
-                                var s = lines[i];
-                                if (s.length < 3) continue;
-                                if (/^\\d{1,2}:\\d{2}$/.test(s)) continue;
-                                if (/^[\\d.]+万?$/.test(s)) continue;
-                                if (/^\\d{1,4}$/.test(s)) continue;
-                                if (/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) continue;
-                                title = s; break;
-                            }
-                        }
-
-                        var statSpans = card.querySelectorAll('.bili-cover-card__stat span');
-                        if (statSpans.length >= 1) {
-                            var t = (statSpans[0].textContent||'').trim();
-                            var n = parseFloat(t.replace('万',''))||0;
-                            play = t.indexOf('万')>=0 ? Math.round(n*10000) : n;
-                        }
-
-                        result.push({bvid: bvid, title: title, play: play});
-                    });
-                    return result;
-                }
-            """)
-            videos.extend(page_videos)
-            if len(page_videos) < 5: break
+            params = sign_params({"mid": uid, "ps": 50, "pn": pn, "order": "pubdate"}, mixin_key)
+            query_string = urlencode(params)
+            api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{query_string}"
+            resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            if not resp or not resp.ok:
+                continue
+            body_text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(body_text)
+            if data.get("code") != 0:
+                break
+            vlist = data.get("data", {}).get("list", {}).get("vlist", []) or []
+            for v in vlist:
+                videos.append({
+                    "bvid": v.get("bvid", ""),
+                    "title": v.get("title", ""),
+                    "play": v.get("play", 0),
+                })
+            if len(vlist) < 50:
+                break
     except Exception as e:
         logger.error(f"爬取视频列表失败 uid={uid}: {e}")
     return videos
