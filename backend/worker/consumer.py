@@ -24,7 +24,7 @@ logger = logging.getLogger("worker")
 QUEUE_KEY = "dynacrawl:queue"
 
 
-async def process_url(msg: dict, browser_pool: BrowserPool):
+async def process_url(msg: dict, browser_pool: BrowserPool, redis_client: aioredis.Redis):
     task_id = msg["task_id"]
     url_id = msg["url_id"]
     url_type = msg["url_type"]
@@ -107,9 +107,19 @@ async def process_url(msg: dict, browser_pool: BrowserPool):
                         url_record.retry_count = retry_count + 1
                         url_record.status = "pending"
                         url_record.error_msg = str(e)[:500]
+                        msg["retry_count"] = retry_count + 1
+                        await redis_client.lpush(QUEUE_KEY, json.dumps(msg, ensure_ascii=False))
                     else:
                         url_record.status = "failed"
                         url_record.error_msg = f"超过最大重试次数: {str(e)[:500]}"
+
+                task = await session.get(Task, task_id)
+                if task:
+                    failed_result = await session.execute(
+                        select(func.count()).select_from(UrlRecord).where(
+                            UrlRecord.task_id == task_id, UrlRecord.status == "failed"))
+                    task.failed_urls = failed_result.scalar() or 0
+                    task.updated_at = datetime.now()
                 await session.commit()
             except Exception:
                 await session.rollback()
@@ -123,7 +133,7 @@ async def consumer_loop(redis_client: aioredis.Redis, browser_pool: BrowserPool)
             if result:
                 _, msg_str = result
                 msg = json.loads(msg_str)
-                asyncio.create_task(process_url(msg, browser_pool))
+                asyncio.create_task(process_url(msg, browser_pool, redis_client))
         except asyncio.CancelledError:
             break
         except Exception as e:
