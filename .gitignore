@@ -8,3 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Project data (SQLite DB etc.)
+data/
+
+# uv lock file (auto-generated, pinned by pyproject.toml)
+uv.lock
+
+# Python version pin
+.python-version
