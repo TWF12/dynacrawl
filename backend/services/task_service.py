@@ -45,7 +45,7 @@ async def create_task(scene: str, input_value: str, dispatcher=None) -> Task:
                                    "url_type": url_record.url_type, "bv_id": bv_id, "retry_count": 0})
 
             url_record2 = UrlRecord(task_id=task.id,
-                                    url=f"https://api.bilibili.com/x/v2/medialist/resource/list?type=1&biz_id=1&bvid={bv_id}",
+                                    url=f"https://api.bilibili.com/x/v2/reply/main?bv_id={bv_id}",
                                     url_type="video_comments")
             session.add(url_record2)
             await session.flush()

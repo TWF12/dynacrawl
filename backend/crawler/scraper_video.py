@@ -1,4 +1,5 @@
 import json
+import time
 import logging
 from typing import Optional
 from playwright.async_api import Page
@@ -72,38 +73,51 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
 
 
 async def scrape_video_comments(page: Page, bv_id: str, max_pages: int = 3) -> list[dict]:
-    """爬取视频评论"""
+    """爬取视频评论（先获取 aid，再调用 reply API）"""
     comments = []
+    aid = None
+
+    await random_delay()
+    try:
+        view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv_id}"
+        resp = await page.goto(view_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        if resp and resp.ok:
+            body_text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(body_text)
+            if data.get("code") == 0:
+                aid = data["data"].get("aid")
+    except Exception as e:
+        logger.error(f"获取视频 aid 失败 bv_id={bv_id}: {e}")
+
+    if not aid:
+        logger.warning(f"无法获取 aid，跳过评论采集 bv_id={bv_id}")
+        return comments
+
     for pn in range(1, max_pages + 1):
-        await random_delay()
+        if pn > 1:
+            await random_delay()
         try:
-            url = f"https://www.bilibili.com/video/{bv_id}"
-            resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            if not resp or not resp.ok: continue
-            for _ in range(3):
-                await page.evaluate("window.scrollBy(0, 800)")
-                await page.wait_for_timeout(1000)
-            page_comments = await page.evaluate("""
-                function() {
-                    var result = [];
-                    document.querySelectorAll('.reply-item, [class*="reply-item"], [class*="comment-item"]').forEach(function(item){
-                        var u = item.querySelector('.user-name, .name, [class*="user-name"]');
-                        var c = item.querySelector('.reply-content, .text, [class*="reply-content"]');
-                        var l = item.querySelector('.like-count, [class*="like"]');
-                        var t = item.querySelector('.reply-time, .time, [class*="time"]');
-                        var un = (u?u.textContent:'').trim();
-                        var ct = (c?c.textContent:'').trim();
-                        if (un && ct) result.push({
-                            bv_id: bv_id, username: un, content: ct,
-                            like_count: parseInt((l?l.textContent:'0').replace(/[^0-9]/g,''))||0,
-                            posted_at: (t?t.textContent:'').trim()
-                        });
-                    });
-                    return result;
-                }
-            """)
-            comments.extend(page_comments)
-            if len(page_comments) < 5: break
+            reply_url = f"https://api.bilibili.com/x/v2/reply/main?oid={aid}&type=1&ps=20&pn={pn}&sort=2"
+            resp = await page.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            if not resp or not resp.ok:
+                continue
+            body_text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(body_text)
+            if data.get("code") != 0:
+                break
+            replies = data.get("data", {}).get("replies", []) or []
+            for r in replies:
+                comments.append({
+                    "bv_id": bv_id,
+                    "username": r.get("member", {}).get("uname", ""),
+                    "content": r.get("content", {}).get("message", ""),
+                    "like_count": r.get("like", 0),
+                    "posted_at": time.strftime(
+                        "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
+                    ) if r.get("ctime") else "",
+                })
+            if len(replies) < 20:
+                break
         except Exception as e:
-            logger.error(f"爬取评论失败 bv_id={bv_id}: {e}")
+            logger.error(f"爬取评论失败 pn={pn} bv_id={bv_id}: {e}")
     return comments
