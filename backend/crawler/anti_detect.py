@@ -1,7 +1,7 @@
 import random
 import asyncio
 from playwright.async_api import BrowserContext, Page
-from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX
+from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -57,6 +57,19 @@ Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
 
 def get_random_ua() -> str:
     return random.choice(USER_AGENTS)
+
+
+def get_random_proxy() -> dict | None:
+    if not PROXY_LIST:
+        return None
+    from urllib.parse import urlparse
+    proxy_url = random.choice(PROXY_LIST)
+    parsed = urlparse(proxy_url)
+    proxy = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}"}
+    if parsed.username:
+        proxy["username"] = parsed.username
+        proxy["password"] = parsed.password or ""
+    return proxy
 
 
 async def apply_stealth(context: BrowserContext):

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
-from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua
+from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,11 @@ class BrowserPool:
 
     async def _create_context(self) -> BrowserContext:
         ua = get_random_ua()
+        proxy = get_random_proxy()
         context = await self._browser.new_context(
-            user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+            user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN",
+            proxy=proxy,
+        )
         await apply_stealth(context)
         self._contexts.append(context)
         return context

@@ -20,3 +20,5 @@ PAGE_TIMEOUT = int(os.getenv("PAGE_TIMEOUT", "30000"))
 NAVIGATION_TIMEOUT = int(os.getenv("NAVIGATION_TIMEOUT", "30000"))
 
 MAX_RETRY = int(os.getenv("MAX_RETRY", "2"))
+
+PROXY_LIST = [p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()]
