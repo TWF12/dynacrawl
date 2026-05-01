@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DynaCrawl - B站数据采集平台</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus@2.6.3/dist/index.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/element-plus@2.6.3/dist/index.full.min.js"></script>
+    <script src="https://unpkg.com/axios@1.7.2/dist/axios.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div class="app-wrap">
+            <div class="topbar">
+                <h1>DynaCrawl — B站动态数据采集平台</h1>
+                <span class="topbar-tag">Playwright + asyncio</span>
+            </div>
+            <div class="main-area">
+                <div class="panel panel-form">
+                    <div class="panel-title">新建采集任务</div>
+                    <div class="panel-body">
+                        <div class="form-row">
+                            <label class="form-label">采集场景</label>
+                            <label class="radio-item"><input type="radio" v-model="newTask.scene" value="up_info">UP主信息</label>
+                            <label class="radio-item"><input type="radio" v-model="newTask.scene" value="video_detail">视频详情</label>
+                        </div>
+                        <div class="form-row">
+                            <label class="form-label">{{ newTask.scene === 'up_info' ? 'UP主UID' : '视频BV号' }}</label>
+                            <input class="form-input" v-model="newTask.input_value"
+                                :placeholder="newTask.scene === 'up_info' ? '如 456664753' : '如 BV1xx411c7mD'">
+                        </div>
+                        <div class="form-row">
+                            <button class="btn btn-primary" @click="submitTask" :disabled="submitting">
+                                {{ submitting ? '提交中...' : '+ 提交采集任务' }}
+                            </button>
+                        </div>
+                        <div class="hint-box">
+                            <template v-if="newTask.scene === 'up_info'">
+                                <b>UP主信息采集：</b><br>输入UP主UID，采集头像、粉丝数、视频BV号、播放量。
+                            </template>
+                            <template v-else>
+                                <b>视频详情采集：</b><br>输入视频BV号，采集标题、播放量、点赞、评论。
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel panel-list">
+                    <div class="panel-title">任务列表 <button class="btn btn-sm" @click="loadTasks" style="float:right">刷新</button></div>
+                    <div class="panel-body">
+                        <table class="data-table" v-if="tasks.length > 0">
+                            <thead><tr><th width="70">场景</th><th width="130">输入</th><th>进度</th><th width="80">状态</th><th width="160">操作</th></tr></thead>
+                            <tbody>
+                                <tr v-for="t in tasks" :key="t.id">
+                                    <td><span class="tag" :class="t.scene==='up_info'?'tag-green':'tag-orange'">{{ t.scene==='up_info'?'UP主':'视频' }}</span></td>
+                                    <td class="ellipsis">{{ t.input_value }}</td>
+                                    <td>
+                                        <div class="progress-cell">
+                                            <div class="progress-bar"><div class="progress-fill" :class="t.status"
+                                                :style="{ width: (t.total_urls>0?Math.round(t.completed_urls/t.total_urls*100):0)+'%' }"></div></div>
+                                            <span class="progress-num">{{ t.completed_urls }}/{{ t.total_urls }}</span>
+                                        </div>
+                                    </td>
+                                    <td><span class="tag" :class="statusTagClass(t.status)">{{ statusLabel(t.status) }}</span></td>
+                                    <td>
+                                        <button class="btn btn-sm btn-primary" @click="viewTask(t)">详情</button>
+                                        <button class="btn btn-sm btn-danger" @click="deleteTask(t.id)">删除</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        <p v-else class="empty-tip">暂无任务，请先创建采集任务</p>
+                        <div class="pager" v-if="taskTotal > taskPageSize">
+                            <button class="btn btn-sm" @click="taskPage--;loadTasks()" :disabled="taskPage<=1">上一页</button>
+                            <span class="pager-info">{{ taskPage }} / {{ Math.ceil(taskTotal / taskPageSize) }}</span>
+                            <button class="btn btn-sm" @click="taskPage++;loadTasks()" :disabled="taskPage>=Math.ceil(taskTotal/taskPageSize)">下一页</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel panel-detail" v-if="selectedTask">
+                <div class="panel-title">
+                    任务详情 - {{ selectedTask.scene==='up_info'?'UP主':'视频' }} | {{ selectedTask.input_value }}
+                    <div style="float:right">
+                        <button class="btn btn-sm" @click="exportCSV(selectedTask.id)">导出CSV</button>
+                        <button class="btn btn-sm" @click="exportJSON(selectedTask.id)">导出JSON</button>
+                        <button class="btn btn-sm" @click="closeDetail">关闭</button>
+                    </div>
+                </div>
+                <div class="panel-body">
+                    <div class="live-progress" v-if="selectedTask.status==='running'">
+                        <div class="progress-bar" style="height:24px"><div class="progress-fill running" :style="{width:wsProgress.percent+'%'}">{{ wsProgress.percent }}%</div></div>
+                        <div class="live-msg">{{ wsProgress.message }}</div>
+                    </div>
+
+                    <h4>URL采集状态</h4>
+                    <table class="data-table" v-if="taskDetail.url_records&&taskDetail.url_records.length>0">
+                        <thead><tr><th>类型</th><th>URL</th><th>状态</th><th>错误信息</th><th>重试</th></tr></thead>
+                        <tbody>
+                            <tr v-for="r in taskDetail.url_records" :key="r.id">
+                                <td>{{ r.url_type }}</td><td class="url-cell">{{ r.url }}</td>
+                                <td><span class="tag" :class="statusTagClass(r.status)">{{ statusLabel(r.status) }}</span></td>
+                                <td class="ellipsis" style="max-width:200px">{{ r.error_msg||'-' }}</td>
+                                <td>{{ r.retry_count }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <template v-if="taskDetail.up_infos&&taskDetail.up_infos.length>0">
+                        <h4>UP主信息</h4>
+                        <table class="data-table">
+                            <thead><tr><th>UID</th><th>昵称</th><th>头像</th><th>粉丝数</th><th>视频数</th></tr></thead>
+                            <tbody>
+                                <tr v-for="u in taskDetail.up_infos" :key="u.id">
+                                    <td>{{ u.uid }}</td><td>{{ u.nickname }}</td>
+                                    <td><img :src="u.avatar_url" width="36" height="36" style="border-radius:50%" referrerpolicy="no-referrer" v-if="u.avatar_url" @error="e=>e.target.style.display='none'"></td>
+                                    <td>{{ (u.follower_count||0).toLocaleString() }}</td>
+                                    <td>{{ u.video_count }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </template>
+
+                    <template v-if="taskDetail.video_infos&&taskDetail.video_infos.length>0">
+                        <h4>视频信息 ({{ taskDetail.video_infos.length }}条)</h4>
+                        <div class="table-scroll">
+                        <table class="data-table">
+                            <thead><tr><th>BV号</th><th>标题</th><th>播放量</th>
+                                <th v-if="selectedTask.scene==='video_detail'">点赞</th>
+                                <th v-if="selectedTask.scene==='video_detail'">投币</th>
+                                <th v-if="selectedTask.scene==='video_detail'">弹幕</th>
+                                <th v-if="selectedTask.scene==='video_detail'">评论</th></tr></thead>
+                            <tbody>
+                                <tr v-for="v in taskDetail.video_infos" :key="v.id">
+                                    <td>{{ v.bv_id }}</td><td class="title-cell">{{ v.title }}</td>
+                                    <td>{{ (v.play_count||0).toLocaleString() }}</td>
+                                    <td v-if="selectedTask.scene==='video_detail'">{{ (v.like_count||0).toLocaleString() }}</td>
+                                    <td v-if="selectedTask.scene==='video_detail'">{{ (v.coin_count||0).toLocaleString() }}</td>
+                                    <td v-if="selectedTask.scene==='video_detail'">{{ (v.danmaku_count||0).toLocaleString() }}</td>
+                                    <td v-if="selectedTask.scene==='video_detail'">{{ (v.comment_count||0).toLocaleString() }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        </div>
+                    </template>
+
+                    <template v-if="taskDetail.comments&&taskDetail.comments.length>0">
+                        <h4>评论列表 ({{ taskDetail.comments.length }}条)</h4>
+                        <div class="table-scroll">
+                        <table class="data-table">
+                            <thead><tr><th>用户名</th><th>内容</th><th>点赞</th></tr></thead>
+                            <tbody>
+                                <tr v-for="c in taskDetail.comments" :key="c.id">
+                                    <td>{{ c.username }}</td><td class="title-cell">{{ c.content }}</td>
+                                    <td>{{ c.like_count }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>

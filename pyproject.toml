@@ -1,0 +1,19 @@
+[project]
+name = "dynacrawl"
+version = "0.1.0"
+description = "动态爬虫数据采集平台 - B站数据采集"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "aiosqlite>=0.20.0",
+    "playwright>=1.52.0",
+    "pydantic>=2.0.0",
+    "redis>=5.0.0",
+    "httpx>=0.28.0",
+    "python-multipart>=0.0.20",
+    "aiofiles>=24.0.0",
+]
+
+
