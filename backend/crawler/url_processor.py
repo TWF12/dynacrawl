@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 
 from backend.config import MAX_RETRY
 from backend.models import UrlRecord, Task, UpInfo, VideoInfo, Comment
-from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
+from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos, VideoProgressCallback
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,18 @@ async def process_url_message(
                         ))
 
             elif url_type == "up_video_list":
-                videos = await scrape_up_videos(page, msg.get("uid", ""))
+                # 构建视频进度回调，映射到任务进度推送
+                async def _video_progress(current: int, total: int, message: str):
+                    if progress_callback:
+                        await progress_callback(
+                            task_id, current, total, 0,
+                            f"视频采集: {message}",
+                        )
+
+                videos = await scrape_up_videos(
+                    page, msg.get("uid", ""),
+                    progress_callback=_video_progress,
+                )
                 for v in videos:
                     session.add(VideoInfo(
                         task_id=task_id, bv_id=v.get("bvid", ""),
