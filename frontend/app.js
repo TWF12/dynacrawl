@@ -73,8 +73,13 @@ const app = createApp({
                     if (d.type === "progress" || d.type === "complete") {
                         wsProgress.percent = d.total_urls > 0 ? Math.round(d.completed_urls / d.total_urls * 100) : 0;
                         wsProgress.message = d.message || "";
-                        loadTasks();
-                        loadTaskDetail(d.task_id);
+                        // 节流：最多每秒更新一次任务列表和详情
+                        const now = Date.now();
+                        if (!_lastWsUpdate || now - _lastWsUpdate > 1000) {
+                            _lastWsUpdate = now;
+                            loadTasks();
+                            loadTaskDetail(d.task_id);
+                        }
                     }
                 } catch (e) { console.error(e); }
             };

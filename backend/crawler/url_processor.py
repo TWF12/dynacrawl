@@ -6,7 +6,7 @@ from sqlalchemy import select, func
 
 from backend.config import MAX_RETRY
 from backend.models import UrlRecord, Task, UpInfo, VideoInfo, Comment
-from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos, VideoProgressCallback
+from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
 
 logger = logging.getLogger(__name__)

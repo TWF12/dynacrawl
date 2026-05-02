@@ -116,7 +116,7 @@
                             <tbody>
                                 <tr v-for="u in taskDetail.up_infos" :key="u.id">
                                     <td>{{ u.uid }}</td><td>{{ u.nickname }}</td>
-                                    <td><img :src="u.avatar_url" width="36" height="36" style="border-radius:50%" referrerpolicy="no-referrer" v-if="u.avatar_url" @error="e=>e.target.style.display='none'"></td>
+                                    <td><img :src="u.avatar_url" :alt="u.nickname" width="36" height="36" style="border-radius:50%" referrerpolicy="no-referrer" v-if="u.avatar_url" @error="e=>e.target.style.display='none'"></td>
                                     <td>{{ (u.follower_count||0).toLocaleString() }}</td>
                                     <td>{{ u.video_count }}</td>
                                 </tr>

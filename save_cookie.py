@@ -1,8 +1,9 @@
 """B站 Cookie 保存工具 —— 扫码登录后自动保存到 data/bilibili_cookies.json"""
 import asyncio, json, os
+from pathlib import Path
 from playwright.async_api import async_playwright
 
-COOKIE_FILE = "data/bilibili_cookies.json"
+COOKIE_FILE = str(Path(__file__).resolve().parent / "data" / "bilibili_cookies.json")
 
 async def main():
     async with async_playwright() as pw:

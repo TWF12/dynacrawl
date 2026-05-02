@@ -2,9 +2,9 @@ import json
 import logging
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Optional, Callable, Awaitable
+from typing import Optional
 
-from backend.config import USE_REDIS, REDIS_URL, BROWSER_CONCURRENCY
+from backend.config import REDIS_URL, QUEUE_KEY
 from backend.crawler.url_processor import process_url_message, ProgressCallback
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class MemoryQueue(QueueInterface):
 
 
 class RedisQueue(QueueInterface):
-    QUEUE_KEY = "dynacrawl:queue"
+    QUEUE_KEY = QUEUE_KEY
     def __init__(self, redis_url: str = REDIS_URL):
         self._redis_url = redis_url
         self._redis = None

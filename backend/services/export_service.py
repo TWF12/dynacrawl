@@ -1,18 +1,20 @@
 import csv, json, io
 from typing import Optional
 from backend.services import task_service
+from backend.schemas import SceneType
 
 
 async def export_csv(task_id: str) -> Optional[str]:
     results = await task_service.get_task_results(task_id)
-    if not results.get("task"): return None
+    if not results.get("task"):
+        return None
 
     output = io.StringIO()
-    output.write("\ufeff")
+    output.write("﻿")
     writer = csv.writer(output)
 
     task = results["task"]
-    if task.scene == "up_info":
+    if task.scene == SceneType.UP_INFO.value:
         writer.writerow(["数据类型", "UID", "昵称", "头像URL", "粉丝数", "视频数", "采集时间"])
         for up in results.get("up_infos", []):
             writer.writerow(["UP主信息", up.uid, up.nickname or "", up.avatar_url or "",
@@ -23,7 +25,7 @@ async def export_csv(task_id: str) -> Optional[str]:
         for v in results.get("video_infos", []):
             writer.writerow(["视频", v.bv_id or "", v.title or "", v.play_count or 0,
                               v.collected_at.isoformat() if v.collected_at else ""])
-    elif task.scene == "video_detail":
+    elif task.scene == SceneType.VIDEO_DETAIL.value:
         writer.writerow(["数据类型", "BV号", "标题", "播放量", "点赞数", "投币数", "弹幕数", "评论数", "采集时间"])
         for v in results.get("video_infos", []):
             writer.writerow(["视频信息", v.bv_id or "", v.title or "", v.play_count or 0,
@@ -40,7 +42,8 @@ async def export_csv(task_id: str) -> Optional[str]:
 
 async def export_json(task_id: str) -> Optional[str]:
     results = await task_service.get_task_results(task_id)
-    if not results.get("task"): return None
+    if not results.get("task"):
+        return None
 
     task = results["task"]
     output = {"task": {"id": task.id, "scene": task.scene, "input_value": task.input_value,
@@ -48,7 +51,7 @@ async def export_json(task_id: str) -> Optional[str]:
                         "completed_urls": task.completed_urls, "failed_urls": task.failed_urls,
                         "created_at": task.created_at.isoformat()}}
 
-    if task.scene == "up_info":
+    if task.scene == SceneType.UP_INFO.value:
         output["up_infos"] = [{"uid": u.uid, "nickname": u.nickname, "avatar_url": u.avatar_url,
                                 "follower_count": u.follower_count, "video_count": u.video_count,
                                 "collected_at": u.collected_at.isoformat() if u.collected_at else ""}
@@ -56,7 +59,7 @@ async def export_json(task_id: str) -> Optional[str]:
         output["video_infos"] = [{"bv_id": v.bv_id, "title": v.title, "play_count": v.play_count,
                                    "collected_at": v.collected_at.isoformat() if v.collected_at else ""}
                                   for v in results.get("video_infos", [])]
-    elif task.scene == "video_detail":
+    elif task.scene == SceneType.VIDEO_DETAIL.value:
         output["video_infos"] = [{"bv_id": v.bv_id, "title": v.title, "play_count": v.play_count,
                                    "like_count": v.like_count, "coin_count": v.coin_count,
                                    "danmaku_count": v.danmaku_count, "comment_count": v.comment_count,

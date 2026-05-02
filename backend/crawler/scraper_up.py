@@ -102,7 +102,7 @@ async def scrape_up_videos(
                 return videos
 
             total_count = _process_arc_data(page1_data, videos, seen_bvids)
-            ps = page1_data.get("page", {}).get("ps", 30)
+            ps = page1_data.get("page", {}).get("ps", 50)
             total_pages = (total_count + ps - 1) // ps if total_count else 0
             if max_pages and max_pages < total_pages:
                 total_pages = max_pages
@@ -115,6 +115,7 @@ async def scrape_up_videos(
                                         f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
 
             await page1.close()
+            page1 = None  # 标记已关闭，避免 finally 重复关闭
 
             # 第 2 页起：并发请求
             if total_pages <= 1:
@@ -165,7 +166,8 @@ async def scrape_up_videos(
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
         finally:
-            await page1.close()
+            if page1 is not None:
+                await page1.close()
 
     return videos
 

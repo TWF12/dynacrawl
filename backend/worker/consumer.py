@@ -10,14 +10,13 @@ if sys.platform == "win32":
 
 import json, logging
 import redis.asyncio as aioredis
-from backend.config import REDIS_URL, BROWSER_CONCURRENCY
+from backend.config import REDIS_URL, QUEUE_KEY
 from backend.database import async_session, init_db
 from backend.crawler.browser_pool import BrowserPool
 from backend.crawler.url_processor import process_url_message
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("worker")
-QUEUE_KEY = "dynacrawl:queue"
 
 
 async def consumer_loop(redis_client: aioredis.Redis, browser_pool: BrowserPool):

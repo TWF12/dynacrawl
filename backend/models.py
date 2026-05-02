@@ -1,9 +1,13 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
 
 from backend.database import Base
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 
 def gen_uuid() -> str:
@@ -20,8 +24,8 @@ class Task(Base):
     completed_urls = Column(Integer, default=0)
     failed_urls = Column(Integer, default=0)
     status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     url_records = relationship("UrlRecord", back_populates="task", cascade="all, delete-orphan")
     up_infos = relationship("UpInfo", back_populates="task", cascade="all, delete-orphan")
@@ -39,8 +43,8 @@ class UrlRecord(Base):
     status = Column(String(20), default="pending")
     error_msg = Column(Text, nullable=True)
     retry_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     task = relationship("Task", back_populates="url_records")
 

@@ -16,9 +16,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from backend.config import USE_REDIS, REDIS_URL, BROWSER_CONCURRENCY, BASE_DIR
+from backend.config import USE_REDIS, REDIS_URL, BASE_DIR
 from backend.database import init_db, async_session
-from backend.crawler.browser_pool import BrowserPool, browser_pool
+from backend.crawler.browser_pool import browser_pool
 from backend.crawler.dispatcher import CrawlDispatcher, MemoryQueue, RedisQueue, set_dispatcher
 from backend.routers import tasks, results, ws
 from backend.services import task_service

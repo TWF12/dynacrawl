@@ -53,17 +53,11 @@ async def create_task(scene: str, input_value: str, dispatcher=None) -> Task:
                                    "url_type": url_record2.url_type, "bv_id": bv_id, "retry_count": 0})
 
         task.total_urls = len(urls_to_queue)
+        task.status = TaskStatus.RUNNING.value
         await session.commit()
 
         if dispatcher:
             await dispatcher.submit_task(task.id, urls_to_queue)
-
-        async with async_session() as s2:
-            t = await s2.get(Task, task.id)
-            if t:
-                t.status = TaskStatus.RUNNING.value
-                t.updated_at = datetime.now()
-                await s2.commit()
 
         return task
 
