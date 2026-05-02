@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
     """爬取 UP 主基本信息（card API + arc/search）"""
-    result = {"uid": uid}
+    result = {"uid": uid, "video_count": 0}
     await random_delay()
     try:
         # 先访问 B站首页获取必要的 cookies
@@ -43,7 +43,7 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 body_text = await page.evaluate("() => document.body.innerText")
                 data = json.loads(body_text)
                 if data.get("code") == 0:
-                    page_info = data.get("data", {}).get("page", {})
+                    page_info = data.get("data", {}).get("list", {}).get("page", {})
                     result["video_count"] = page_info.get("count", 0)
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
