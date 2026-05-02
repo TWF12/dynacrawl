@@ -20,6 +20,8 @@ class BrowserPool:
         self._browser: Optional[Browser] = None
         self._contexts: list[BrowserContext] = []
         self._lock = asyncio.Lock()
+        self._headful_playwright = None
+        self._headful_browser: Optional[Browser] = None
 
     async def start(self):
         async with self._lock:
@@ -40,8 +42,56 @@ class BrowserPool:
                        "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
             )
 
+    async def _ensure_headful_browser(self):
+        """延迟初始化头有浏览器，用于需要绕过 B站 -352 检测的场景"""
+        async with self._lock:
+            if self._headful_browser is not None:
+                return
+            self._headful_playwright = await async_playwright().start()
+            self._headful_browser = await self._headful_playwright.chromium.launch(
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled",
+                       "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
+            )
+
+    @asynccontextmanager
+    async def acquire_headful_page(self):
+        """获取头有浏览器页面，已配置隐身脚本和随机 UA"""
+        async with self._semaphore:
+            await self._ensure_headful_browser()
+            ua = get_random_ua()
+            proxy = get_random_proxy()
+            context = await self._headful_browser.new_context(
+                user_agent=ua,
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                proxy=proxy,
+            )
+            await apply_stealth(context)
+            page = await context.new_page()
+            await setup_page(page)
+            try:
+                yield page
+            finally:
+                await page.close()
+                await context.close()
+
     async def stop(self):
         async with self._lock:
+            # 清理头有浏览器资源
+            if self._headful_browser:
+                try:
+                    await self._headful_browser.close()
+                except Exception:
+                    pass
+                self._headful_browser = None
+            if self._headful_playwright:
+                try:
+                    await self._headful_playwright.stop()
+                except Exception:
+                    pass
+                self._headful_playwright = None
+
             for ctx in self._contexts:
                 try: await ctx.close()
                 except Exception: pass
