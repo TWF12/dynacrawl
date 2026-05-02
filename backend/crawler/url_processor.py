@@ -59,6 +59,13 @@ async def process_url_message(
                     ))
                 result = {"video_count": len(videos)}
 
+                # 回写 UpInfo.video_count
+                up_result = await session.execute(
+                    select(UpInfo).where(UpInfo.task_id == task_id))
+                up_info = up_result.scalars().first()
+                if up_info:
+                    up_info.video_count = len(videos)
+
             elif url_type == "video_api":
                 result = await scrape_video_info(page, msg.get("bv_id", ""))
                 if result:
