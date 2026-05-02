@@ -16,6 +16,19 @@ COOKIE_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "bilib
 logger = logging.getLogger(__name__)
 
 
+def _load_storage_state() -> dict | None:
+    """加载 B站 登录 cookie，文件不存在则返回 None"""
+    abs_path = os.path.abspath(COOKIE_FILE)
+    if not os.path.exists(abs_path):
+        return None
+    try:
+        with open(abs_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning("加载 cookie 文件失败: %s", e)
+        return None
+
+
 class BrowserPool:
     def __init__(self, concurrency: int = BROWSER_CONCURRENCY):
         self._concurrency = concurrency
@@ -26,6 +39,7 @@ class BrowserPool:
         self._lock = asyncio.Lock()
         self._headful_playwright = None
         self._headful_browser: Optional[Browser] = None
+        self._headful_contexts: list[BrowserContext] = []
 
     async def start(self):
         async with self._lock:
@@ -63,28 +77,7 @@ class BrowserPool:
         """获取头有浏览器页面，已配置隐身脚本和随机 UA，自动加载登录 cookie"""
         async with self._semaphore:
             await self._ensure_headful_browser()
-            ua = get_random_ua()
-            proxy = get_random_proxy()
-
-            # 加载保存的 B站 登录 cookie
-            storage_state = None
-            abs_cookie = os.path.abspath(COOKIE_FILE)
-            if os.path.exists(abs_cookie):
-                try:
-                    with open(abs_cookie, "r", encoding="utf-8") as f:
-                        storage_state = json.load(f)
-                    logger.info("已加载 B站 登录 cookie: %s", abs_cookie)
-                except Exception as e:
-                    logger.warning("加载 cookie 文件失败: %s", e)
-
-            context = await self._headful_browser.new_context(
-                user_agent=ua,
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-                proxy=proxy,
-                storage_state=storage_state,
-            )
-            await apply_stealth(context)
+            context = await self._new_headful_context()
             page = await context.new_page()
             await setup_page(page)
             try:
@@ -92,6 +85,34 @@ class BrowserPool:
             finally:
                 await page.close()
                 await context.close()
+
+    @asynccontextmanager
+    async def acquire_headful_context(self):
+        """获取头有浏览器 context（可建多个 page 用于并发），已加载登录 cookie"""
+        async with self._semaphore:
+            await self._ensure_headful_browser()
+            context = await self._new_headful_context()
+            self._headful_contexts.append(context)
+            try:
+                yield context
+            finally:
+                self._headful_contexts.remove(context)
+                await context.close()
+
+    async def _new_headful_context(self) -> BrowserContext:
+        """创建已配置隐身 + cookie 的头有 context"""
+        ua = get_random_ua()
+        proxy = get_random_proxy()
+        storage = _load_storage_state()
+        context = await self._headful_browser.new_context(
+            user_agent=ua,
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
+            proxy=proxy,
+            storage_state=storage,
+        )
+        await apply_stealth(context)
+        return context
 
     async def stop(self):
         async with self._lock:
@@ -113,6 +134,10 @@ class BrowserPool:
                 try: await ctx.close()
                 except Exception: pass
             self._contexts.clear()
+            for ctx in self._headful_contexts:
+                try: await ctx.close()
+                except Exception: pass
+            self._headful_contexts.clear()
             if self._browser:
                 await self._browser.close()
                 self._browser = None
@@ -123,9 +148,11 @@ class BrowserPool:
     async def _create_context(self) -> BrowserContext:
         ua = get_random_ua()
         proxy = get_random_proxy()
+        storage = _load_storage_state()
         context = await self._browser.new_context(
             user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN",
             proxy=proxy,
+            storage_state=storage,
         )
         await apply_stealth(context)
         self._contexts.append(context)
