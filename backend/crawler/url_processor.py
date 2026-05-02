@@ -40,7 +40,6 @@ async def process_url_message(
             if url_type == "up_api":
                 result = await scrape_up_info(page, msg.get("uid", ""))
                 if result:
-                    # 双写兼容：如果 up_video_list 先执行，更新已有记录；否则新建
                     up_existing = await session.execute(
                         select(UpInfo).where(UpInfo.task_id == task_id))
                     up_row = up_existing.scalars().first()
@@ -48,6 +47,9 @@ async def process_url_message(
                         up_row.nickname = result.get("nickname", "")
                         up_row.avatar_url = result.get("avatar_url", "")
                         up_row.follower_count = result.get("follower_count")
+                        # 用 API 返回的真实视频数覆盖
+                        if result.get("video_count", 0) > 0:
+                            up_row.video_count = result["video_count"]
                         if result.get("raw_data"):
                             up_row.raw_data = result.get("raw_data")
                     else:
@@ -81,12 +83,14 @@ async def process_url_message(
                     ))
                 result = {"video_count": len(videos)}
 
-                # 双写兼容：无论 up_api 是否已执行，都能正确回写 video_count
+                # 双写兼容：不覆盖 up_api 已写好的真实视频总数
                 up_result = await session.execute(
                     select(UpInfo).where(UpInfo.task_id == task_id))
                 up_info = up_result.scalars().first()
                 if up_info:
-                    up_info.video_count = len(videos)
+                    # 只有当 video_count 为 0（up_api 没拿到真实值）时才用爬取条数
+                    if up_info.video_count == 0:
+                        up_info.video_count = len(videos)
                 else:
                     session.add(UpInfo(
                         task_id=task_id, uid=msg.get("uid", ""),

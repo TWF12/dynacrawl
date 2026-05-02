@@ -172,7 +172,7 @@ async def scrape_up_videos(
 
 
 async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:
-    """用 page.evaluate + fetch 调 arc/search API，返回 data dict"""
+    """用 page.goto 调 arc/search API（先访问空间页建立上下文），返回 data dict"""
     params = sign_params({
         "mid": uid, "ps": "50", "pn": str(pn),
         "tid": "0", "keyword": "", "order": "pubdate",
@@ -180,15 +180,21 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
 
     try:
-        raw = await page.evaluate(f"""
-            async () => {{
-                let resp = await fetch('{api_url}');
-                return await resp.text();
-            }}
-        """)
-        data = json.loads(raw)
-        if data.get("code") == 0 and isinstance(data.get("data"), dict):
-            return data["data"]
+        # 先访问空间页设置 Referer + cookie 上下文
+        await page.goto(
+            f"https://space.bilibili.com/{uid}",
+            timeout=PAGE_TIMEOUT, wait_until="domcontentloaded",
+        )
+        # 再请求 arc/search API
+        resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        if resp and resp.ok:
+            text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(text)
+            if data.get("code") == 0 and isinstance(data.get("data"), dict):
+                return data["data"]
+            else:
+                logger.warning("arc/search pn=%d code=%d msg=%s",
+                               pn, data.get("code"), data.get("message", ""))
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
     return None
