@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 import sys
 import logging
 from typing import Optional
@@ -8,6 +10,8 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
 from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy
+
+COOKIE_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "data", "bilibili_cookies.json")
 
 logger = logging.getLogger(__name__)
 
@@ -56,16 +60,29 @@ class BrowserPool:
 
     @asynccontextmanager
     async def acquire_headful_page(self):
-        """获取头有浏览器页面，已配置隐身脚本和随机 UA"""
+        """获取头有浏览器页面，已配置隐身脚本和随机 UA，自动加载登录 cookie"""
         async with self._semaphore:
             await self._ensure_headful_browser()
             ua = get_random_ua()
             proxy = get_random_proxy()
+
+            # 加载保存的 B站 登录 cookie
+            storage_state = None
+            abs_cookie = os.path.abspath(COOKIE_FILE)
+            if os.path.exists(abs_cookie):
+                try:
+                    with open(abs_cookie, "r", encoding="utf-8") as f:
+                        storage_state = json.load(f)
+                    logger.info("已加载 B站 登录 cookie: %s", abs_cookie)
+                except Exception as e:
+                    logger.warning("加载 cookie 文件失败: %s", e)
+
             context = await self._headful_browser.new_context(
                 user_agent=ua,
                 viewport={"width": 1920, "height": 1080},
                 locale="zh-CN",
                 proxy=proxy,
+                storage_state=storage_state,
             )
             await apply_stealth(context)
             page = await context.new_page()
