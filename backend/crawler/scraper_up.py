@@ -11,8 +11,8 @@ from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
-# 并发翻页数
-FETCH_CONCURRENCY = 3
+# 翻页并发数（改为 1 串行，避免触发验证码）
+FETCH_CONCURRENCY = 1
 
 # 进度回调: (current, total, message)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
@@ -124,6 +124,7 @@ async def scrape_up_videos(
 
             async def _fetch_one_page(pn: int):
                 async with sem:
+                    await random_delay()  # 每页之间随机延迟，避免触发验证码
                     pg = await context.new_page()
                     try:
                         data = await _fetch_arc_page(pg, uid, pn, mixin_key)
@@ -131,9 +132,7 @@ async def scrape_up_videos(
                     finally:
                         await pg.close()
 
-            # 分批创建任务
             remaining = list(range(2, total_pages + 1))
-            # 每完成一批就汇报进度
             tasks = [_fetch_one_page(pn) for pn in remaining]
             completed_pages = 1
             errors = 0
@@ -147,7 +146,7 @@ async def scrape_up_videos(
                         errors += 1
                 except Exception as exc:
                     errors += 1
-                    logger.warning("并发爬取页失败: %s", exc)
+                    logger.warning("翻页失败 pn: %s", exc)
 
                 completed_pages += 1
                 if progress_callback:
@@ -172,7 +171,7 @@ async def scrape_up_videos(
 
 
 async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:
-    """用 page.goto 调 arc/search API（先访问空间页建立上下文），返回 data dict"""
+    """用 page.goto 调 arc/search API（设 Referer 头代替访问空间页，避免多余请求）"""
     params = sign_params({
         "mid": uid, "ps": "50", "pn": str(pn),
         "tid": "0", "keyword": "", "order": "pubdate",
@@ -180,12 +179,9 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
 
     try:
-        # 先访问空间页设置 Referer + cookie 上下文
-        await page.goto(
-            f"https://space.bilibili.com/{uid}",
-            timeout=PAGE_TIMEOUT, wait_until="domcontentloaded",
-        )
-        # 再请求 arc/search API
+        await page.set_extra_http_headers({
+            "Referer": f"https://space.bilibili.com/{uid}/upload/video",
+        })
         resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if resp and resp.ok:
             text = await page.evaluate("() => document.body.innerText")
