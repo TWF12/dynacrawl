@@ -55,6 +55,10 @@ async def scrape_up_videos(page: Page, uid: str, max_pages: int = 3) -> list[dic
     videos = []
     await random_delay()
     try:
+        # 先访问 B站首页获取必要的 cookies
+        await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        await random_delay()
+
         mixin_key = await get_mixin_key(page)
         if not mixin_key:
             logger.warning("WBI mixin_key 为空，跳过视频列表获取")
@@ -72,6 +76,7 @@ async def scrape_up_videos(page: Page, uid: str, max_pages: int = 3) -> list[dic
             body_text = await page.evaluate("() => document.body.innerText")
             data = json.loads(body_text)
             if data.get("code") != 0:
+                logger.warning("arc/search 返回错误 code=%s msg=%s uid=%s", data.get("code"), data.get("message", ""), uid)
                 break
             vlist = data.get("data", {}).get("list", {}).get("vlist", []) or []
             for v in vlist:
