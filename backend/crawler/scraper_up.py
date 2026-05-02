@@ -11,61 +11,40 @@ logger = logging.getLogger(__name__)
 
 
 async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
-    """爬取 UP 主基本信息（WBI 签名 API）"""
+    """爬取 UP 主基本信息（card API + arc/search）"""
     result = {"uid": uid}
     await random_delay()
     try:
-        mixin_key = await get_mixin_key(page)
-        if not mixin_key:
-            logger.warning("WBI mixin_key 为空，跳过签名")
-            return result
-        params = sign_params({"mid": uid}, mixin_key)
-        query_string = urlencode(params)
-        api_url = f"https://api.bilibili.com/x/space/wbi/acc/info?{query_string}"
-        response = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        # 先访问 B站首页获取必要的 cookies
+        await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        await random_delay()
+
+        # 1. card API 获取昵称、头像、粉丝数（无需 WBI 签名）
+        card_url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
+        response = await page.goto(card_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if response and response.ok:
             body_text = await page.evaluate("() => document.body.innerText")
             data = json.loads(body_text)
-            if data.get("code") == 0 and data.get("data"):
-                card = data["data"]
+            if data.get("code") == 0:
+                card = data.get("data", {}).get("card", {})
                 result["nickname"] = card.get("name", "")
                 result["avatar_url"] = card.get("face", "")
-                result["follower_count"] = card.get("follower", 0)
-                result["video_count"] = card.get("video_count", 0)
+                result["follower_count"] = card.get("fans", 0)
                 result["raw_data"] = card
-                return result
 
-        logger.warning("API获取UP信息失败，尝试从页面提取")
-        space_url = f"https://space.bilibili.com/{uid}"
-        response = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-        if response and response.ok:
-            data = await page.evaluate("""
-                function() {
-                    var r = {};
-                    if (document.title) {
-                        var m = document.title.match(/^(.+?)的个人空间/);
-                        if (m) r.name = m[1].trim();
-                    }
-                    var nav = document.querySelector('.n-tab-links, [class*="tab-links"], .tab-container');
-                    if (nav) {
-                        var nt = nav.innerText || '';
-                        var nm = nt.match(/投稿\\s*([\\d.]+万?\\+?)/);
-                        if (nm) {
-                            var ns = nm[1];
-                            if (ns === '999+') r.videos = 999;
-                            else if (ns.indexOf('万')>=0) r.videos = Math.round(parseFloat(ns)*10000)||0;
-                            else r.videos = parseInt(ns)||0;
-                        }
-                    }
-                    var av = document.querySelector('.h-avatar img, [class*="avatar"] img');
-                    if (av) r.face = av.src || '';
-                    return r;
-                }
-            """)
-            result["nickname"] = data.get("name", "")
-            result["avatar_url"] = data.get("face", "")
-            result["follower_count"] = data.get("follower", 0)
-            result["video_count"] = data.get("videos", 0)
+        # 2. arc/search API 获取视频总数（需要 WBI 签名）
+        mixin_key = await get_mixin_key(page)
+        if mixin_key:
+            params = sign_params({"mid": uid, "ps": 1, "pn": 1}, mixin_key)
+            query_string = urlencode(params)
+            arc_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{query_string}"
+            response = await page.goto(arc_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            if response and response.ok:
+                body_text = await page.evaluate("() => document.body.innerText")
+                data = json.loads(body_text)
+                if data.get("code") == 0:
+                    page_info = data.get("data", {}).get("page", {})
+                    result["video_count"] = page_info.get("count", 0)
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
     return result
