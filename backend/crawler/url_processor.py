@@ -40,14 +40,25 @@ async def process_url_message(
             if url_type == "up_api":
                 result = await scrape_up_info(page, msg.get("uid", ""))
                 if result:
-                    session.add(UpInfo(
-                        task_id=task_id, uid=result.get("uid", ""),
-                        nickname=result.get("nickname", ""),
-                        avatar_url=result.get("avatar_url", ""),
-                        follower_count=result.get("follower_count"),
-                        video_count=result.get("video_count"),
-                        raw_data=result.get("raw_data"),
-                    ))
+                    # 双写兼容：如果 up_video_list 先执行，更新已有记录；否则新建
+                    up_existing = await session.execute(
+                        select(UpInfo).where(UpInfo.task_id == task_id))
+                    up_row = up_existing.scalars().first()
+                    if up_row:
+                        up_row.nickname = result.get("nickname", "")
+                        up_row.avatar_url = result.get("avatar_url", "")
+                        up_row.follower_count = result.get("follower_count")
+                        if result.get("raw_data"):
+                            up_row.raw_data = result.get("raw_data")
+                    else:
+                        session.add(UpInfo(
+                            task_id=task_id, uid=result.get("uid", ""),
+                            nickname=result.get("nickname", ""),
+                            avatar_url=result.get("avatar_url", ""),
+                            follower_count=result.get("follower_count"),
+                            video_count=result.get("video_count"),
+                            raw_data=result.get("raw_data"),
+                        ))
 
             elif url_type == "up_video_list":
                 videos = await scrape_up_videos(page, msg.get("uid", ""))
@@ -59,12 +70,17 @@ async def process_url_message(
                     ))
                 result = {"video_count": len(videos)}
 
-                # 回写 UpInfo.video_count
+                # 双写兼容：无论 up_api 是否已执行，都能正确回写 video_count
                 up_result = await session.execute(
                     select(UpInfo).where(UpInfo.task_id == task_id))
                 up_info = up_result.scalars().first()
                 if up_info:
                     up_info.video_count = len(videos)
+                else:
+                    session.add(UpInfo(
+                        task_id=task_id, uid=msg.get("uid", ""),
+                        video_count=len(videos),
+                    ))
 
             elif url_type == "video_api":
                 result = await scrape_video_info(page, msg.get("bv_id", ""))
