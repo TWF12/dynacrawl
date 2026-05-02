@@ -34,8 +34,8 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
     return result
 
 
-async def scrape_up_videos(page: Page, uid: str, max_pages: int = 10) -> list[dict]:
-    """爬取 UP 主的视频列表（拦截 arc/search API 响应，需登录 cookie）"""
+async def scrape_up_videos(page: Page, uid: str, max_pages: int = 0) -> list[dict]:
+    """爬取 UP 主的视频列表（/upload/video 投稿页 + arc/search API 拦截）"""
     videos = []
     await random_delay()
 
@@ -43,22 +43,22 @@ async def scrape_up_videos(page: Page, uid: str, max_pages: int = 10) -> list[di
         intercepted_data: list[dict] = []
 
         def _on_arc_search(response):
-            if "/wbi/arc/search" not in response.url:
-                return
-            async def _capture():
-                try:
-                    body = await response.json()
-                    if body.get("code") == 0 and isinstance(body.get("data"), dict):
-                        intercepted_data.append(body["data"])
-                except Exception:
-                    pass
-            asyncio.ensure_future(_capture())
+            if "/x/space/wbi/arc/search" in response.url and response.status == 200:
+                async def _capture():
+                    try:
+                        body = await response.json()
+                        if body.get("code") == 0 and isinstance(body.get("data"), dict):
+                            intercepted_data.append(body["data"])
+                    except Exception:
+                        pass
+                asyncio.ensure_future(_capture())
 
         page2.on("response", _on_arc_search)
 
         try:
-            space_url = f"https://space.bilibili.com/{uid}"
-            resp = await page2.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            # 访问投稿管理页
+            upload_url = f"https://space.bilibili.com/{uid}/upload/video"
+            resp = await page2.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             if not resp or not resp.ok:
                 return videos
             await page2.wait_for_timeout(3000)
@@ -70,34 +70,71 @@ async def scrape_up_videos(page: Page, uid: str, max_pages: int = 10) -> list[di
             seen_bvids: set = set()
             total_count = 0
 
-            # 处理已拦截的响应
+            # 处理首页
             for data in intercepted_data:
                 total_count = _process_arc_data(data, videos, seen_bvids) or total_count
 
-            logger.info("arc/search 第 1 页获取 %d 条视频 uid=%s (共 %d)",
-                        len(videos), uid, total_count)
+            ps = intercepted_data[0].get("page", {}).get("ps", 30) if intercepted_data else 30
+            total_pages = (total_count + ps - 1) // ps if total_count else max_pages
+            if max_pages and max_pages < total_pages:
+                total_pages = max_pages
 
-            # 翻页：滚动触发懒加载
-            max_pn = min(max_pages, (total_count + 49) // 50) if total_count else max_pages
+            logger.info("投稿页第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
+                        len(videos), uid, total_count, total_pages)
 
-            for pn in range(2, max_pn + 1):
+            # 翻页：点击分页按钮 "下一页"
+            for pn in range(2, total_pages + 1):
                 await random_delay()
-                before_count = len(intercepted_data)
-                before_videos = len(videos)
+                before = len(intercepted_data)
 
+                # 先滚动到底部让分页器可见
                 await page2.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(0.5)
 
-                # 等待新的 arc/search 响应（最多 20 秒）
-                waited = 0
-                while len(intercepted_data) <= before_count and waited < 20:
-                    await asyncio.sleep(0.5)
-                    waited += 0.5
+                # 尝试点击页码按钮
+                clicked = False
+                for selector in [
+                    f'button.vui_pagenation--btn-num:text-is("{pn}")',
+                    f'button:text-is("{pn}")',
+                ]:
+                    try:
+                        loc = page2.locator(selector)
+                        if await loc.count() > 0:
+                            await loc.first.click(force=True, timeout=5000)
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
 
-                for data in intercepted_data[before_count:]:
-                    total_count = _process_arc_data(data, videos, seen_bvids) or total_count
+                if not clicked:
+                    # 点击"下一页"
+                    try:
+                        next_btn = page2.locator(
+                            'button.vui_pagenation--btn-side:text-is("下一页")')
+                        if await next_btn.count() > 0:
+                            await next_btn.first.click(force=True, timeout=5000)
+                            clicked = True
+                    except Exception:
+                        pass
+
+                if not clicked:
+                    logger.info("翻页失败 pn=%d uid=%s，停止翻页", pn, uid)
+                    break
+
+                # 等待新响应
+                await page2.wait_for_timeout(3000)
+
+                added_responses = len(intercepted_data) - before
+                if added_responses == 0:
+                    logger.info("翻页无新响应 pn=%d uid=%s，停止", pn, uid)
+                    break
+
+                before_videos = len(videos)
+                for data in intercepted_data[before:]:
+                    _process_arc_data(data, videos, seen_bvids)
 
                 added = len(videos) - before_videos
-                logger.info("arc/search 第 %d 页获取 %d 条视频 uid=%s", pn, added, uid)
+                logger.info("投稿页第 %d 页获取 %d 条 uid=%s", pn, added, uid)
                 if added == 0:
                     break
 
