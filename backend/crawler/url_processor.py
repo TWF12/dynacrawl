@@ -82,20 +82,20 @@ async def process_url_message(
                         title=v.get("title", ""), play_count=v.get("play"),
                         raw_data=v,
                     ))
-                video_errors = result.get("errors", [])
+                # 用 API 返回或 sidebar DOM 提取的真实总数
+                api_total = result.get("total_count", 0)
 
-                # 双写兼容：不覆盖 up_api 已写好的真实视频总数
                 up_result = await session.execute(
                     select(UpInfo).where(UpInfo.task_id == task_id))
                 up_info = up_result.scalars().first()
                 if up_info:
-                    # 只有当 video_count 为 0（up_api 没拿到真实值）时才用爬取条数
                     if up_info.video_count == 0:
-                        up_info.video_count = len(videos)
+                        # 优先用 API/sidebar 拿到的真实总数，其次用实际爬取条数
+                        up_info.video_count = api_total or len(videos)
                 else:
                     session.add(UpInfo(
                         task_id=task_id, uid=msg.get("uid", ""),
-                        video_count=len(videos),
+                        video_count=api_total or len(videos),
                     ))
 
             elif url_type == "video_api":
