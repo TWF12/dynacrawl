@@ -10,7 +10,7 @@ if sys.platform == "win32":
 
 import json, logging
 import redis.asyncio as aioredis
-from backend.config import REDIS_URL, QUEUE_KEY
+from backend.config import REDIS_URL, QUEUE_KEY, BROWSER_CONCURRENCY
 from backend.database import async_session, init_db
 from backend.crawler.browser_pool import BrowserPool
 from backend.crawler.url_processor import process_url_message

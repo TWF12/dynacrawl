@@ -31,9 +31,3 @@ ERROR_MESSAGES = {
 }
 
 
-def format_error(code: str, detail: str = "") -> str:
-    """格式化错误信息: [CODE] message | detail"""
-    msg = ERROR_MESSAGES.get(code, f"未知错误({code})")
-    if detail:
-        return f"[{code}] {msg} | {detail}"
-    return f"[{code}] {msg}"

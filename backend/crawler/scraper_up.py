@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import asyncio
 from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
@@ -153,7 +152,7 @@ async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
     return after - before
 
 
-async def _dom_fallback(context, uid: str, seen_bvids: set, page1,
+async def _dom_fallback(uid: str, seen_bvids: set, page1,
                        progress_callback=None) -> tuple[list[dict], int]:
     """多页面试探 DOM 兜底提取视频，返回 (videos, total_count)"""
     all_videos = []
@@ -249,7 +248,7 @@ async def scrape_up_videos(
                 # arc/search 失败 → 多页面 DOM 兜底
                 logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
                 dom_videos, dom_total = await _dom_fallback(
-                    context, uid, seen_bvids, page1, progress_callback)
+                    uid, seen_bvids, page1, progress_callback)
                 for v in dom_videos:
                     videos.append(v)
                 total_count = dom_total or await _get_video_count_from_page(page1, uid)

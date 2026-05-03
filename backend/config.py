@@ -17,7 +17,6 @@ REQUEST_DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN", "1.0"))
 REQUEST_DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX", "3.0"))
 
 PAGE_TIMEOUT = int(os.getenv("PAGE_TIMEOUT", "30000"))
-NAVIGATION_TIMEOUT = int(os.getenv("NAVIGATION_TIMEOUT", "30000"))
 
 MAX_RETRY = int(os.getenv("MAX_RETRY", "2"))
 
