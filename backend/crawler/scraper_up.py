@@ -153,7 +153,8 @@ async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
     return after - before
 
 
-async def _dom_fallback(context, uid: str, seen_bvids: set, page1) -> tuple[list[dict], int]:
+async def _dom_fallback(context, uid: str, seen_bvids: set, page1,
+                       progress_callback=None) -> tuple[list[dict], int]:
     """多页面试探 DOM 兜底提取视频，返回 (videos, total_count)"""
     all_videos = []
     total_count = 0
@@ -169,21 +170,27 @@ async def _dom_fallback(context, uid: str, seen_bvids: set, page1) -> tuple[list
             await page1.goto(attempt_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             await page1.wait_for_timeout(3000)
 
-            # 提取视频数和视频列表
             total_count = await _get_video_count_from_page(page1, uid) or total_count
             videos = await _dom_extract(page1, uid, seen_bvids)
             all_videos.extend(videos)
 
+            if progress_callback:
+                await progress_callback(1, max(1, total_count or 1),
+                                        f"DOM 兜底: 已获取 {len(all_videos)}/{total_count or '?'} 条")
+
             if all_videos:
-                # 滚动翻页
-                for _ in range(10):
+                for scroll_i in range(10):
                     new_count = await _dom_scroll_for_more(page1)
                     if new_count == 0:
                         break
                     await random_delay()
                     more = await _dom_extract(page1, uid, seen_bvids)
                     all_videos.extend(more)
-                break  # 成功获取到数据，停止尝试其他 URL
+                    if progress_callback and total_count:
+                        await progress_callback(
+                            min(scroll_i + 2, max(1, total_count)), max(1, total_count),
+                            f"DOM 兜底: 已获取 {len(all_videos)}/{total_count} 条")
+                break
         except Exception:
             continue
 
@@ -241,7 +248,8 @@ async def scrape_up_videos(
             if not page1_data:
                 # arc/search 失败 → 多页面 DOM 兜底
                 logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
-                dom_videos, dom_total = await _dom_fallback(context, uid, seen_bvids, page1)
+                dom_videos, dom_total = await _dom_fallback(
+                    context, uid, seen_bvids, page1, progress_callback)
                 for v in dom_videos:
                     videos.append(v)
                 total_count = dom_total or await _get_video_count_from_page(page1, uid)

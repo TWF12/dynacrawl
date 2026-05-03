@@ -154,21 +154,34 @@ async def process_url_message(
 
         task = await session.get(Task, task_id)
         if task:
-            completed_result = await session.execute(
+            completed_count = (await session.execute(
                 select(func.count()).select_from(UrlRecord).where(
                     UrlRecord.task_id == task_id, UrlRecord.status == "completed"))
-            task.completed_urls = completed_result.scalar() or 0
-            failed_result = await session.execute(
+            ).scalar() or 0
+            partial_count = (await session.execute(
+                select(func.count()).select_from(UrlRecord).where(
+                    UrlRecord.task_id == task_id, UrlRecord.status == "partial"))
+            ).scalar() or 0
+            failed_count = (await session.execute(
                 select(func.count()).select_from(UrlRecord).where(
                     UrlRecord.task_id == task_id, UrlRecord.status == "failed"))
-            task.failed_urls = failed_result.scalar() or 0
+            ).scalar() or 0
 
-            all_done = await session.execute(
+            task.completed_urls = completed_count + partial_count
+            task.failed_urls = failed_count
+
+            all_done = (await session.execute(
                 select(func.count()).select_from(UrlRecord).where(
                     UrlRecord.task_id == task_id,
                     UrlRecord.status.in_(["pending", "processing"])))
-            if (all_done.scalar() or 0) == 0:
-                task.status = "completed"
+            ).scalar() or 0
+            if all_done == 0:
+                if failed_count > 0:
+                    task.status = "failed"
+                elif partial_count > 0:
+                    task.status = "partial"
+                else:
+                    task.status = "completed"
             task.updated_at = datetime.now()
 
         await session.commit()
@@ -176,7 +189,7 @@ async def process_url_message(
         if progress_callback and task:
             await progress_callback(
                 task_id, task.completed_urls, task.total_urls, task.failed_urls,
-                f"已完成: {url_type}")
+                f"{'异常' if task.status == 'partial' else '已完成'}: {url_type}")
 
     except Exception as e:
         logger.error(f"{consumer_label}处理 URL {url_id} 失败: {e}")
