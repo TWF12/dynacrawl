@@ -1,8 +1,13 @@
 import random
+import os
+import json
+import logging
 import asyncio
 from urllib.parse import urlparse
 from playwright.async_api import BrowserContext, Page
 from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
+
+logger = logging.getLogger(__name__)
 
 USER_AGENTS = [
     # Chrome 132-135 Windows
@@ -102,6 +107,45 @@ WebGLRenderingContext.prototype.getParameter = function(p) {
 """
 
 
+# Clash 代理自动轮换
+CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "")
+CLASH_GROUP = os.environ.get("CLASH_GROUP", "")
+_last_clash_node = None
+
+
+def _rotate_clash_proxy() -> str | None:
+    """通过 Clash API 切换代理组节点，返回新节点名。需要 CLASH_CONTROLLER 和 CLASH_GROUP 环境变量"""
+    global _last_clash_node
+    if not CLASH_CONTROLLER or not CLASH_GROUP:
+        return None
+    try:
+        import urllib.request
+        # 获取代理组信息
+        url = f"{CLASH_CONTROLLER}/proxies/{CLASH_GROUP}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        all_nodes = data.get("all", [])
+        if len(all_nodes) <= 1:
+            return None
+        # 随机选一个不同于上次的节点
+        candidates = [n for n in all_nodes if n != _last_clash_node]
+        if not candidates:
+            candidates = all_nodes
+        chosen = random.choice(candidates)
+        # 切换
+        switch_req = urllib.request.Request(
+            url, data=json.dumps({"name": chosen}).encode(),
+            headers={"Content-Type": "application/json"}, method="PUT")
+        urllib.request.urlopen(switch_req, timeout=5)
+        _last_clash_node = chosen
+        logger.info("Clash 切换节点: %s → %s", _last_clash_node or "初始", chosen)
+        return chosen
+    except Exception as e:
+        logger.warning("Clash 节点切换失败: %s", e)
+    return None
+
+
 def get_random_ua() -> str:
     return random.choice(USER_AGENTS)
 
@@ -134,6 +178,11 @@ async def setup_page(page: Page):
         "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
         "Sec-Ch-UA-Platform": '"Windows"',
     })
+
+
+async def rotate_proxy_if_needed():
+    """在创建新 context 前调用，自动轮换 Clash 节点"""
+    _rotate_clash_proxy()
 
 
 async def random_delay():

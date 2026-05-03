@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS, COOKIE_FILE
-from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy
+from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,7 @@ class BrowserPool:
 
     async def _new_headful_context(self) -> BrowserContext:
         """创建已配置隐身 + cookie 的头有 context"""
+        await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
         storage = _load_storage_state()
