@@ -187,9 +187,11 @@ async def process_url_message(
         await session.commit()
 
         if progress_callback and task:
+            scraper_status = result.get("status", "ok") if isinstance(result, dict) else "ok"
+            status_label = {"ok": "已完成", "fallback": "异常", "failed": "失败"}.get(scraper_status, "已完成")
             await progress_callback(
                 task_id, task.completed_urls, task.total_urls, task.failed_urls,
-                f"{'异常' if task.status == 'partial' else '已完成'}: {url_type}")
+                f"{status_label}: {url_type}")
 
     except Exception as e:
         logger.error(f"{consumer_label}处理 URL {url_id} 失败: {e}")
