@@ -175,7 +175,9 @@ def _rotate_clash_proxy() -> str | None:
         try:
             proxy_handler = urllib.request.ProxyHandler({"https": CLASH_PROXY})
             opener = urllib.request.build_opener(proxy_handler)
-            with opener.open(urllib.request.Request("https://api.ip.sb/ip"), timeout=5) as r:
+            ip_req = urllib.request.Request("https://api.ip.sb/ip",
+                                            headers={"User-Agent": "curl/8.0"})
+            with opener.open(ip_req, timeout=5) as r:
                 exit_ip = r.read().decode().strip()
         except Exception:
             exit_ip = "?"
