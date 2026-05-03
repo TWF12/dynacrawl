@@ -129,10 +129,13 @@ const app = createApp({
                     // 如果正在查看详情且任务已完成，刷新详情
                     if (selectedTask.value) {
                         const updated = tasks.value.find(t => t.id === selectedTask.value.id);
-                        if (updated && (updated.status === "completed" || updated.status === "failed")) {
-                            await loadTaskDetail(selectedTask.value.id);
-                            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-                                wsConnection.close();
+                        if (updated) {
+                            selectedTask.value = updated;  // 同步状态变化
+                            if (updated.status === "completed" || updated.status === "failed" || updated.status === "partial") {
+                                await loadTaskDetail(selectedTask.value.id);
+                                if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                                    wsConnection.close();
+                                }
                             }
                         }
                     }
