@@ -25,7 +25,7 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
     errors = []
     await random_delay()
     try:
-        # 1. card API 获取基本信息 + archive_count
+        # 1. card API → 基本信息 + archive_count（优先，拿到即返回）
         await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         await random_delay()
 
@@ -40,59 +40,58 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 result["avatar_url"] = card.get("face", "")
                 result["follower_count"] = card.get("fans", 0)
                 result["raw_data"] = card
-                # card API 返回的 archive_count 优先使用
                 ac = card.get("archive_count", 0)
                 if ac and isinstance(ac, int) and ac > 0:
                     result["video_count"] = ac
+                    return result  # card API 已拿到，直接返回
             else:
                 errors.append("card API 返回异常")
         else:
             errors.append("card API HTTP 错误")
 
-        # 2. 如果 card API 没拿到 video_count，用 arc/search?ps=1
-        if result["video_count"] == 0:
-            mixin_key = await get_mixin_key(page)
-            if mixin_key:
-                params = sign_params({
-                    "mid": uid, "ps": "1", "pn": "1",
-                    "tid": "0", "keyword": "", "order": "pubdate",
-                }, mixin_key)
-                api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
-                resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-                if resp and resp.ok:
-                    body_text = await page.evaluate("() => document.body.innerText")
-                    data = json.loads(body_text)
-                    if data.get("code") == 0:
-                        total = data.get("data", {}).get("page", {}).get("count", 0)
-                        if total:
-                            result["video_count"] = total
-                    elif data.get("code") == -799 or data.get("code") == -352:
-                        errors.append("arc/search 风控拦截")
-                    else:
-                        errors.append("视频总数获取失败")
-                elif resp and resp.status == 412:
-                    errors.append("arc/search 风控拦截(412)")
+        # 2. card API 没拿到 → arc/search?ps=1
+        mixin_key = await get_mixin_key(page)
+        if mixin_key:
+            params = sign_params({
+                "mid": uid, "ps": "1", "pn": "1",
+                "tid": "0", "keyword": "", "order": "pubdate",
+            }, mixin_key)
+            api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
+            resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            if resp and resp.ok:
+                body_text = await page.evaluate("() => document.body.innerText")
+                data = json.loads(body_text)
+                if data.get("code") == 0:
+                    total = data.get("data", {}).get("page", {}).get("count", 0)
+                    if total:
+                        result["video_count"] = total
+                        return result  # arc/search 已拿到，直接返回
+                elif data.get("code") == -799 or data.get("code") == -352:
+                    errors.append("arc/search 风控拦截")
                 else:
-                    errors.append("arc/search HTTP 错误")
+                    errors.append("视频总数获取失败")
+            elif resp and resp.status == 412:
+                errors.append("arc/search 风控拦截(412)")
             else:
-                errors.append("WBI 密钥获取失败")
+                errors.append("arc/search HTTP 错误")
+        else:
+            errors.append("WBI 密钥获取失败")
 
         # 3. API 都失败 → 加载 /upload/video 从 sidebar DOM 提取
-        if result["video_count"] == 0:
-            try:
-                upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-                resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
-                if resp and resp.ok:
-                    await page.wait_for_timeout(2000)
-                    dom_count = await _get_video_count_from_page(page, uid)
-                    if dom_count:
-                        result["video_count"] = dom_count
-                    else:
-                        errors.append("sidebar DOM 也未找到视频数")
+        try:
+            upload_url = f"https://space.bilibili.com/{uid}/upload/video"
+            resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            if resp and resp.ok:
+                await page.wait_for_timeout(2000)
+                dom_count = await _get_video_count_from_page(page, uid)
+                if dom_count:
+                    result["video_count"] = dom_count
                 else:
-                    errors.append("加载投稿页失败")
-            except Exception:
-                errors.append("加载投稿页超时")
+                    errors.append("sidebar DOM 也未找到视频数")
+            else:
+                errors.append("加载投稿页失败")
+        except Exception:
+            errors.append("加载投稿页超时")
 
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
