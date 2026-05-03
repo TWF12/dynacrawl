@@ -140,14 +140,15 @@ async def process_url_message(
 
         url_record = await session.get(UrlRecord, url_id)
         if url_record:
-            url_record.status = "completed"
             url_record.updated_at = datetime.now()
-            # 存储错误码
             scrape_errors = []
             if isinstance(result, dict):
                 scrape_errors = result.get("errors", [])
             if scrape_errors:
                 url_record.error_msg = "; ".join(scrape_errors)
+                url_record.status = "failed"
+            else:
+                url_record.status = "completed"
 
         task = await session.get(Task, task_id)
         if task:
