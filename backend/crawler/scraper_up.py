@@ -1,6 +1,6 @@
 import json
 import logging
-import os
+import re
 import asyncio
 from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
@@ -125,14 +125,23 @@ async def scrape_up_videos(
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
                 return {"videos": videos, "total_count": 0, "errors": errors}
 
-            # 首页数据
+            # 首页数据：先尝试 arc/search API，失败则回退 DOM 提取
             page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
             if not page1_data:
-                # arc/search 失败，尝试从页面 DOM 提取视频总数
+                # arc/search 失败 → DOM 兜底提取（页面可能仍有可见的视频卡片）
                 total_count = await _get_video_count_from_page(page1, uid)
+                dom_videos = await _extract_videos_from_page_dom(page1)
+                for v in dom_videos:
+                    bvid = v.get("bvid", "")
+                    if bvid and bvid not in seen_bvids:
+                        seen_bvids.add(bvid)
+                        videos.append(v)
                 if total_count:
-                    logger.warning("arc/search 无响应，但从页面获取到视频总数 %d uid=%s", total_count, uid)
-                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL, f"从页面获取到总数 {total_count}"))
+                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL,
+                                               f"DOM 兜底获取 {len(videos)} 条, 总数 {total_count}"))
+                elif len(videos) > 0:
+                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL,
+                                               f"DOM 兜底获取 {len(videos)} 条"))
                 else:
                     errors.append(format_error(E104_NO_VIDEOS_AT_ALL))
                 return {"videos": videos, "total_count": total_count, "errors": errors}
@@ -233,6 +242,49 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
     return None
+
+
+async def _extract_videos_from_page_dom(page: Page) -> list[dict]:
+    """从 /upload/video 页面 DOM 提取视频卡片（arc/search API 失败时的兜底方案）"""
+    try:
+        items = await page.evaluate("""
+            () => {
+                let results = [];
+                let links = document.querySelectorAll('a[href*="/video/BV"]');
+                links.forEach(a => {
+                    let href = a.getAttribute('href') || '';
+                    let bvMatch = href.match(/BV[A-Za-z0-9]{10}/);
+                    if (!bvMatch) return;
+                    let bvid = bvMatch[0];
+                    // 标题：封面 img.alt
+                    let img = a.querySelector('img');
+                    let title = img ? (img.getAttribute('alt') || '').trim() : '';
+                    // 播放量：a.textContent 第一个数字
+                    let raw = (a.textContent || '').trim();
+                    let playMatch = raw.match(/([\\d.]+万?)/);
+                    let play = playMatch ? playMatch[1] : '0';
+                    results.push({bvid, title, play});
+                });
+                return results;
+            }
+        """)
+        videos = []
+        seen = set()
+        for item in items:
+            bvid = item.get("bvid", "")
+            if bvid and bvid not in seen:
+                seen.add(bvid)
+                title = (item.get("title") or "").strip()
+                play_str = (item.get("play") or "0").strip()
+                try:
+                    n = float(play_str.replace("万", "").replace(",", ""))
+                    play = round(n * 10000) if "万" in play_str else int(n)
+                except (ValueError, TypeError):
+                    play = 0
+                videos.append({"bvid": bvid, "title": title, "play": play})
+        return videos
+    except Exception:
+        return []
 
 
 async def _get_video_count_from_page(page: Page, uid: str) -> int:

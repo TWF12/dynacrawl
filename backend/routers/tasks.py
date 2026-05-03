@@ -2,8 +2,15 @@ from fastapi import APIRouter, HTTPException
 from backend.schemas import TaskCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
 from backend.services import task_service
 from backend.crawler.dispatcher import get_dispatcher
+from backend.crawler.error_codes import ERROR_MESSAGES
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+@router.get("/error-codes")
+async def get_error_codes():
+    """返回所有错误码及其说明"""
+    return {"error_codes": ERROR_MESSAGES}
 
 
 @router.post("", response_model=TaskResponse, status_code=201)
