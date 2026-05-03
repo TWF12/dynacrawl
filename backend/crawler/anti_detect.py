@@ -115,9 +115,18 @@ _last_clash_node = None
 _clash_groups_cache = None
 
 
+def _safe_log(msg: str, *args):
+    """Windows GBK 兼容的日志输出"""
+    try:
+        logger.info(msg, *args)
+    except UnicodeEncodeError:
+        logger.info(msg.encode("ascii", errors="replace").decode(), *args)
+
+
 def _auto_detect_group() -> str | None:
-    """未指定 CLASH_GROUP 时自动检测第一个非 DIRECT/REJECT 的选择组"""
+    """未指定 CLASH_GROUP 时自动检测第一个可用的选择组"""
     global _clash_groups_cache
+    SKIP_GROUPS = {"DIRECT", "REJECT", "GLOBAL"}
     try:
         import urllib.request
         req = urllib.request.Request(f"{CLASH_CONTROLLER}/proxies")
@@ -126,9 +135,8 @@ def _auto_detect_group() -> str | None:
         proxies = data.get("proxies", {})
         for name, info in proxies.items():
             if info.get("type") in ("Selector", "URLTest", "Fallback"):
-                if name not in ("DIRECT", "REJECT", "🐟漏网之鱼", "🛑广告拦截"):
-                    _clash_groups_cache = list(proxies.keys())
-                    logger.info("Clash 自动检测代理组: %s", name)
+                if name not in SKIP_GROUPS and "广告" not in name and "漏网" not in name:
+                    _safe_log("Clash 检测到代理组: %s", name)
                     return name
     except Exception:
         pass
@@ -143,8 +151,9 @@ def _rotate_clash_proxy() -> str | None:
         if not group:
             return None
 
-        import urllib.request
-        url = f"{CLASH_CONTROLLER}/proxies/{group}"
+        import urllib.request, urllib.parse
+        encoded_group = urllib.parse.quote(group, safe="")
+        url = f"{CLASH_CONTROLLER}/proxies/{encoded_group}"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
@@ -170,10 +179,10 @@ def _rotate_clash_proxy() -> str | None:
                 exit_ip = r.read().decode().strip()
         except Exception:
             exit_ip = "?"
-        logger.info("Clash 切换节点: %s → %s  IP: %s", _last_clash_node or "初始", chosen, exit_ip)
+        _safe_log("Clash 切换: %s -> %s  IP:%s", _last_clash_node or "初始", chosen, exit_ip)
         return chosen
     except Exception as e:
-        logger.debug("Clash 节点切换失败: %s", e)
+        logger.debug("Clash 切换失败: %s", e)
     return None
 
 

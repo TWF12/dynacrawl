@@ -6,7 +6,10 @@ DynaCrawl 启动入口
 import sys
 import os
 
+# Windows 强制 UTF-8 输出
 if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
