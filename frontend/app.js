@@ -74,12 +74,12 @@ const app = createApp({
                     if (d.type === "progress" || d.type === "complete") {
                         wsProgress.percent = d.total_urls > 0 ? Math.round(d.completed_urls / d.total_urls * 100) : 0;
                         wsProgress.message = d.message || "";
-                        // 进度和消息立即更新，详情节流每秒刷新
-                        const now = Date.now();
-                        if (now - _lastWsUpdate > 1000) {
-                            _lastWsUpdate = now;
+                        // 防抖：取消上次待执行的刷新，500ms 后同时刷新详情和任务列表
+                        if (_lastWsUpdate) clearTimeout(_lastWsUpdate);
+                        _lastWsUpdate = setTimeout(function () {
                             loadTaskDetail(d.task_id);
-                        }
+                            loadTasks();
+                        }, 500);
                     }
                 } catch (e) { console.error(e); }
             };
