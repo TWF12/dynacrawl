@@ -77,6 +77,23 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
             else:
                 errors.append("WBI 密钥获取失败")
 
+        # 3. API 都失败 → 加载 /upload/video 从 sidebar DOM 提取
+        if result["video_count"] == 0:
+            try:
+                upload_url = f"https://space.bilibili.com/{uid}/upload/video"
+                resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+                if resp and resp.ok:
+                    await page.wait_for_timeout(2000)
+                    dom_count = await _get_video_count_from_page(page, uid)
+                    if dom_count:
+                        result["video_count"] = dom_count
+                    else:
+                        errors.append("sidebar DOM 也未找到视频数")
+                else:
+                    errors.append("加载投稿页失败")
+            except Exception:
+                errors.append("加载投稿页超时")
+
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
         errors.append("网络请求超时")
