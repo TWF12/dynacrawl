@@ -45,9 +45,9 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                     result["video_count"] = ac
                     return result  # card API 已拿到，直接返回
             else:
-                errors.append("card API 返回异常")
+                errors.append("API 请求失败")
         else:
-            errors.append("card API HTTP 错误")
+            errors.append("API 请求失败")
 
         # 2. card API 没拿到 → arc/search?ps=1
         mixin_key = await get_mixin_key(page)
@@ -65,17 +65,13 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                     total = data.get("data", {}).get("page", {}).get("count", 0)
                     if total:
                         result["video_count"] = total
-                        return result  # arc/search 已拿到，直接返回
-                elif data.get("code") == -799 or data.get("code") == -352:
-                    errors.append("arc/search 风控拦截")
+                        return result
                 else:
-                    errors.append("视频总数获取失败")
-            elif resp and resp.status == 412:
-                errors.append("arc/search 风控拦截(412)")
+                    errors.append("API 请求失败")
             else:
-                errors.append("arc/search HTTP 错误")
+                errors.append("API 请求失败")
         else:
-            errors.append("WBI 密钥获取失败")
+            errors.append("API 请求失败")
 
         # 3. API 都失败 → 加载 /upload/video 从 sidebar DOM 提取
         try:
@@ -87,15 +83,15 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 if dom_count:
                     result["video_count"] = dom_count
                 else:
-                    errors.append("sidebar DOM 也未找到视频数")
+                    errors.append("DOM 提取失败")
             else:
-                errors.append("加载投稿页失败")
+                errors.append("页面加载失败")
         except Exception:
-            errors.append("加载投稿页超时")
+            errors.append("页面加载失败")
 
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
-        errors.append("网络请求超时")
+        errors.append("请求超时")
 
     if errors:
         result["errors"] = errors
@@ -151,7 +147,7 @@ async def scrape_up_videos(
             # 获取 mixin_key
             mixin_key = await get_mixin_key(page1)
             if not mixin_key:
-                errors.append("WBI 密钥获取失败")
+                errors.append("API 请求失败")
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
                 return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
 
@@ -167,11 +163,11 @@ async def scrape_up_videos(
                         seen_bvids.add(bvid)
                         videos.append(v)
                 if total_count:
-                    errors.append(f"arc/search 无响应, DOM 兜底获取 {len(videos)} 条, 总数 {total_count}")
+                    errors.append(f"DOM 提取 {len(videos)} 条, 总数 {total_count}")
                 elif len(videos) > 0:
-                    errors.append(f"arc/search 无响应, DOM 兜底获取 {len(videos)} 条")
+                    errors.append(f"DOM 提取 {len(videos)} 条")
                 else:
-                    errors.append("arc/search 无响应且页面无视频")
+                    errors.append("API 请求失败")
                 return {"videos": videos, "total_count": total_count, "errors": errors,
                         "status": _pick_status(errors, len(videos) > 0)}
 
@@ -245,7 +241,7 @@ async def scrape_up_videos(
 
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
-            errors.append(f"网络异常: {exc!s:.200}")
+            errors.append("请求超时")
         finally:
             if page1 is not None:
                 await page1.close()
