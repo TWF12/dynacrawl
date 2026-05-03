@@ -278,21 +278,33 @@ async def _extract_videos_from_page_dom(page: Page) -> list[dict]:
 
 
 async def _get_video_count_from_page(page: Page, uid: str) -> int:
-    """从 /upload/video 页面的 sidebar tab 提取视频总数（即使视频列表为空也能获取）"""
+    """从 /upload/video 页面的 sidebar 提取视频总数（即使视频列表为空也能获取）"""
     try:
         count = await page.evaluate("""
             () => {
-                // 优先从"投稿XX"tab 的数字提取
+                // sidebar: .side-nav__item.active 内的 .side-nav__item__sub-text
+                let activeItem = document.querySelector('.side-nav__item.active');
+                if (activeItem) {
+                    let subText = activeItem.querySelector('.side-nav__item__sub-text');
+                    if (subText) {
+                        let n = parseInt((subText.textContent || '').trim());
+                        if (n > 0) return n;
+                    }
+                }
+                // 所有 side-nav__item 中匹配"视频"的
+                let items = document.querySelectorAll('.side-nav__item');
+                for (let item of items) {
+                    let text = (item.textContent || '').trim();
+                    let m = text.match(/视频\\s*(\\d+)/);
+                    if (m) return parseInt(m[1]);
+                }
+                // 旧版 tab 选择器兜底
                 let tabs = document.querySelectorAll('.nav-tab__item');
                 for (let tab of tabs) {
                     let text = (tab.textContent || '').trim();
                     let m = text.match(/投稿\\s*(\\d+)/);
                     if (m) return parseInt(m[1]);
                 }
-                // 从 body text 匹配 "视频 X" 或 "投稿 X"
-                let bodyText = document.body.textContent || '';
-                let m = bodyText.match(/(?:视频|投稿)\\s*(\\d+)/);
-                if (m) return parseInt(m[1]);
                 return 0;
             }
         """)
