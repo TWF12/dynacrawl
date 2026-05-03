@@ -1,29 +1,50 @@
 import random
 import asyncio
+from urllib.parse import urlparse
 from playwright.async_api import BrowserContext, Page
 from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0",
+    # Chrome 132-135 Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    # Chrome 132-134 Mac
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Chrome 133 Linux
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+    # Edge 133
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0",
+    # Firefox 136
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:136.0) Gecko/20100101 Firefox/136.0",
 ]
 
+# 浏览器指纹隐身脚本
 STEALTH_SCRIPT = """
+// webdriver 检测
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 delete navigator.__proto__.webdriver;
-window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+
+// chrome runtime
+window.chrome = {
+    runtime: {},
+    loadTimes: function() {},
+    csi: function() {},
+    app: {}
+};
+
+// permissions
 const origQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) => (
     parameters.name === 'notifications' ?
         Promise.resolve({ state: Notification.permission, onchange: null }) :
         origQuery(parameters)
 );
+
+// plugins
 Object.defineProperty(navigator, 'plugins', {
     get: () => {
         const arr = [];
@@ -45,13 +66,39 @@ Object.defineProperty(navigator, 'mimeTypes', {
         return arr;
     }
 });
+
+// locale
 Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en-US', 'en'] });
 Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' });
 Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+// hardware
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => [4,6,8,12,16][Math.floor(Math.random()*5)] });
+Object.defineProperty(navigator, 'deviceMemory', { get: () => [4,8,8,16,16][Math.floor(Math.random()*5)] });
 Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
 Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+
+// canvas fingerprint noise
+const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+HTMLCanvasElement.prototype.toDataURL = function(type) {
+    const ctx = this.getContext('2d');
+    if (ctx) {
+        const imgData = ctx.getImageData(0, 0, 1, 1);
+        if (imgData && imgData.data) {
+            imgData.data[0] = imgData.data[0] ^ 1;
+            ctx.putImageData(imgData, 0, 0);
+        }
+    }
+    return origToDataURL.apply(this, arguments);
+};
+
+// webgl fingerprint noise
+const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+WebGLRenderingContext.prototype.getParameter = function(p) {
+    if (p === 37445) return 'Intel Inc.';
+    if (p === 37446) return 'Intel Iris OpenGL Engine';
+    return origGetParameter.call(this, p);
+};
 """
 
 
@@ -62,8 +109,9 @@ def get_random_ua() -> str:
 def get_random_proxy() -> dict | None:
     if not PROXY_LIST:
         return None
-    from urllib.parse import urlparse
-    proxy_url = random.choice(PROXY_LIST)
+    proxy_url = random.choice(PROXY_LIST).strip()
+    if not proxy_url:
+        return None
     parsed = urlparse(proxy_url)
     proxy = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}"}
     if parsed.username:
@@ -77,10 +125,14 @@ async def apply_stealth(context: BrowserContext):
 
 
 async def setup_page(page: Page):
-    await page.set_viewport_size({"width": random.randint(1400, 1920), "height": random.randint(800, 1080)})
+    w = random.randint(1400, 1920)
+    h = random.randint(800, 1080)
+    await page.set_viewport_size({"width": w, "height": h})
     await page.set_extra_http_headers({
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
+        "Sec-Ch-UA-Platform": '"Windows"',
     })
 
 
