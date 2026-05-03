@@ -167,7 +167,7 @@ async def process_url_message(
                     UrlRecord.task_id == task_id, UrlRecord.status == "failed"))
             ).scalar() or 0
 
-            task.completed_urls = completed_count + partial_count
+            task.completed_urls = completed_count + partial_count + failed_count
             task.failed_urls = failed_count
 
             all_done = (await session.execute(

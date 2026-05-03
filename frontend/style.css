@@ -45,6 +45,7 @@ body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; background: #f
 .progress-bar { flex: 1; height: 14px; background: #ebeef5; border-radius: 7px; overflow: hidden; min-width: 60px; }
 .progress-fill { height: 100%; border-radius: 7px; transition: width .3s; background: #667eea; color: #fff; font-size: 11px; text-align: center; line-height: 14px; }
 .progress-fill.completed { background: #67c23a; }
+.progress-fill.partial { background: #e6a23c; }
 .progress-fill.failed { background: #f56c6c; }
 .progress-num { font-size: 12px; color: #999; white-space: nowrap; }
 
