@@ -9,13 +9,6 @@ from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
-from backend.crawler.error_codes import (
-    E001_CARD_API_FAILED, E002_VIDEO_COUNT_FAILED,
-    E101_ARC_SEARCH_BLOCKED, E102_ARC_SEARCH_HTTP_ERR,
-    E103_VIDEO_INCOMPLETE, E104_NO_VIDEOS_AT_ALL, E105_NO_LOGIN_COOKIE,
-    E201_NETWORK_TIMEOUT, E202_PAGE_LOAD_FAILED, E203_WBI_KEY_FAILED,
-    format_error,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +45,9 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 if ac and isinstance(ac, int) and ac > 0:
                     result["video_count"] = ac
             else:
-                errors.append(E001_CARD_API_FAILED)
+                errors.append("card API 返回异常")
         else:
-            errors.append(E001_CARD_API_FAILED)
+            errors.append("card API HTTP 错误")
 
         # 2. 如果 card API 没拿到 video_count，用 arc/search?ps=1
         if result["video_count"] == 0:
@@ -74,19 +67,19 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                         if total:
                             result["video_count"] = total
                     elif data.get("code") == -799 or data.get("code") == -352:
-                        errors.append(E101_ARC_SEARCH_BLOCKED)
+                        errors.append("arc/search 风控拦截")
                     else:
-                        errors.append(E002_VIDEO_COUNT_FAILED)
+                        errors.append("视频总数获取失败")
                 elif resp and resp.status == 412:
-                    errors.append(E101_ARC_SEARCH_BLOCKED)
+                    errors.append("arc/search 风控拦截(412)")
                 else:
-                    errors.append(E102_ARC_SEARCH_HTTP_ERR)
+                    errors.append("arc/search HTTP 错误")
             else:
-                errors.append(E203_WBI_KEY_FAILED)
+                errors.append("WBI 密钥获取失败")
 
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
-        errors.append(E201_NETWORK_TIMEOUT)
+        errors.append("网络请求超时")
 
     if errors:
         result["errors"] = errors
@@ -114,14 +107,14 @@ async def scrape_up_videos(
             upload_url = f"https://space.bilibili.com/{uid}/upload/video"
             resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             if not resp or not resp.ok:
-                errors.append(format_error(E202_PAGE_LOAD_FAILED, f"status={resp.status if resp else 'None'}"))
+                errors.append(f"页面加载失败 status={resp.status if resp else 'None'}")
                 return {"videos": videos, "total_count": 0, "errors": errors}
             await page1.wait_for_timeout(3000)
 
             # 获取 mixin_key
             mixin_key = await get_mixin_key(page1)
             if not mixin_key:
-                errors.append(format_error(E203_WBI_KEY_FAILED))
+                errors.append("WBI 密钥获取失败")
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
                 return {"videos": videos, "total_count": 0, "errors": errors}
 
@@ -137,13 +130,11 @@ async def scrape_up_videos(
                         seen_bvids.add(bvid)
                         videos.append(v)
                 if total_count:
-                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL,
-                                               f"DOM 兜底获取 {len(videos)} 条, 总数 {total_count}"))
+                    errors.append(f"arc/search 无响应, DOM 兜底获取 {len(videos)} 条, 总数 {total_count}")
                 elif len(videos) > 0:
-                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL,
-                                               f"DOM 兜底获取 {len(videos)} 条"))
+                    errors.append(f"arc/search 无响应, DOM 兜底获取 {len(videos)} 条")
                 else:
-                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL))
+                    errors.append("arc/search 无响应且页面无视频")
                 return {"videos": videos, "total_count": total_count, "errors": errors}
 
             total_count = _process_arc_data(page1_data, videos, seen_bvids)
@@ -205,12 +196,11 @@ async def scrape_up_videos(
                 logger.warning("翻页失败数: %d uid=%s", errors, uid)
 
             if total_count and len(videos) < total_count:
-                errors.append(format_error(E103_VIDEO_INCOMPLETE,
-                                           f"获取 {len(videos)}/{total_count}"))
+                errors.append(f"视频列表不完整: 获取 {len(videos)}/{total_count}")
 
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
-            errors.append(format_error(E201_NETWORK_TIMEOUT, str(exc)[:200]))
+            errors.append(f"网络异常: {exc!s:.200}")
         finally:
             if page1 is not None:
                 await page1.close()
