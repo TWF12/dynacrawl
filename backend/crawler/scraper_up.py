@@ -159,6 +159,7 @@ async def _dom_fallback(context, uid: str, seen_bvids: set, page1) -> tuple[list
     total_count = 0
 
     urls_to_try = [
+        f"https://space.bilibili.com/{uid}/lists",
         f"https://space.bilibili.com/{uid}/video?tid=0&pn=1&keyword=&order=pubdate",
         f"https://space.bilibili.com/{uid}",
     ]
