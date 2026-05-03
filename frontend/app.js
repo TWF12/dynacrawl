@@ -14,6 +14,7 @@ const app = createApp({
         const wsProgress = reactive({ percent: 0, message: "" });
         let wsConnection = null;
         let wsHeartbeat = null;
+        let _lastWsUpdate = 0;
 
         function statusTagClass(status) {
             const m = { pending: "tag-blue", running: "tag-yellow", processing: "tag-yellow", completed: "tag-green", failed: "tag-red" };
@@ -73,11 +74,10 @@ const app = createApp({
                     if (d.type === "progress" || d.type === "complete") {
                         wsProgress.percent = d.total_urls > 0 ? Math.round(d.completed_urls / d.total_urls * 100) : 0;
                         wsProgress.message = d.message || "";
-                        // 节流：最多每秒更新一次任务列表和详情
+                        // 进度和消息立即更新，详情节流每秒刷新
                         const now = Date.now();
-                        if (!_lastWsUpdate || now - _lastWsUpdate > 1000) {
+                        if (now - _lastWsUpdate > 1000) {
                             _lastWsUpdate = now;
-                            loadTasks();
                             loadTaskDetail(d.task_id);
                         }
                     }
@@ -116,8 +116,29 @@ const app = createApp({
         function exportCSV(id) { window.open("/api/tasks/" + id + "/export/csv", "_blank"); }
         function exportJSON(id) { window.open("/api/tasks/" + id + "/export/json", "_blank"); }
 
-        onMounted(function () { loadTasks(); });
-        onUnmounted(function () { if (wsConnection) wsConnection.close(); });
+        let _taskListTimer = null;
+        // 任务列表自动刷新：当有运行中任务时每 3 秒刷新一次
+        function _startAutoRefresh() {
+            if (_taskListTimer) return;
+            _taskListTimer = setInterval(async function () {
+                const hasRunning = tasks.value.some(t => t.status === "running" || t.status === "processing");
+                if (hasRunning) {
+                    await loadTasks();
+                    // 如果正在查看详情且任务已完成，刷新详情
+                    if (selectedTask.value) {
+                        const updated = tasks.value.find(t => t.id === selectedTask.value.id);
+                        if (updated && (updated.status === "completed" || updated.status === "failed")) {
+                            await loadTaskDetail(selectedTask.value.id);
+                            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                                wsConnection.close();
+                            }
+                        }
+                    }
+                }
+            }, 3000);
+        }
+        onMounted(function () { loadTasks(); _startAutoRefresh(); });
+        onUnmounted(function () { if (wsConnection) wsConnection.close(); if (_taskListTimer) clearInterval(_taskListTimer); });
 
         return { newTask, submitting, tasks, taskTotal, taskPage, taskPageSize, selectedTask, taskDetail, wsProgress,
             statusTagClass, statusLabel, loadTasks, submitTask, viewTask, closeDetail, deleteTask, exportCSV, exportJSON };
