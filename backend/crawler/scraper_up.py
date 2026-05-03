@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import asyncio
 from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
@@ -11,8 +12,8 @@ from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
-# 翻页并发数（改为 1 串行，避免触发验证码）
-FETCH_CONCURRENCY = 1
+# 翻页并发数（环境变量可配，默认 2；注意风控）
+FETCH_CONCURRENCY = int(os.environ.get("FETCH_CONCURRENCY", "2"))
 
 # 进度回调: (current, total, message)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
@@ -124,8 +125,8 @@ async def scrape_up_videos(
             sem = asyncio.Semaphore(FETCH_CONCURRENCY)
 
             async def _fetch_one_page(pn: int):
+                await random_delay()  # 延迟在信号量之外，确保请求自然错开
                 async with sem:
-                    await random_delay()  # 每页之间随机延迟，避免触发验证码
                     pg = await context.new_page()
                     try:
                         data = await _fetch_arc_page(pg, uid, pn, mixin_key)

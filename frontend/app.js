@@ -52,8 +52,10 @@ const app = createApp({
 
         async function viewTask(task) {
             selectedTask.value = task;
+            // 立即用已有数据显示进度，避免闪现 0%
+            wsProgress.percent = task.total_urls > 0 ? Math.round(task.completed_urls / task.total_urls * 100) : 0;
+            wsProgress.message = "";
             Object.assign(taskDetail, { task: null, url_records: [], up_infos: [], video_infos: [], comments: [] });
-            wsProgress.percent = 0; wsProgress.message = "";
             try {
                 const res = await axios.get("/api/tasks/" + task.id + "/results");
                 Object.assign(taskDetail, res.data);
