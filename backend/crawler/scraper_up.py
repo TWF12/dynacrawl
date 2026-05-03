@@ -12,8 +12,8 @@ from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
-# 翻页并发数（环境变量可配，默认 2；注意风控）
-FETCH_CONCURRENCY = int(os.environ.get("FETCH_CONCURRENCY", "2"))
+# 翻页并发数（=1 串行，B站风控严格，并发 2 即触发验证码）
+FETCH_CONCURRENCY = 1
 
 # 进度回调: (current, total, message)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
