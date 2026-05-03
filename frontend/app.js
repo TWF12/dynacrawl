@@ -74,10 +74,12 @@ const app = createApp({
                     const d = JSON.parse(event.data);
                     if (d.type === "pong") return;
                     if (d.type === "progress" || d.type === "complete") {
-                        console.log("WS progress:", d.completed_urls + "/" + d.total_urls, d.message);
-                        wsProgress.percent = d.total_urls > 0 ? Math.round(d.completed_urls / d.total_urls * 100) : 0;
+                        console.log("WS:", d.completed_urls + "/" + d.total_urls, d.message);
+                        // 仅当有有效数字时更新进度条，否则保持原值（避免视频进度归零）
+                        if (d.total_urls > 0) {
+                            wsProgress.percent = Math.round(d.completed_urls / d.total_urls * 100);
+                        }
                         wsProgress.message = d.message || "";
-                        // 直接刷新详情和任务列表，每条消息都更新
                         loadTaskDetail(d.task_id);
                         loadTasks();
                     }

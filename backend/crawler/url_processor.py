@@ -79,7 +79,7 @@ async def process_url_message(
                 async def _video_progress(current: int, total: int, message: str):
                     if progress_callback:
                         await progress_callback(
-                            task_id, current, total, 0,
+                            task_id, 0, 0, 0,  # 不覆盖 URL 进度数字
                             f"视频采集: {message}",
                         )
 
