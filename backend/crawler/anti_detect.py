@@ -139,7 +139,18 @@ def _rotate_clash_proxy() -> str | None:
             headers={"Content-Type": "application/json"}, method="PUT")
         urllib.request.urlopen(switch_req, timeout=5)
         _last_clash_node = chosen
-        logger.info("Clash 切换节点: %s → %s", _last_clash_node or "初始", chosen)
+        # 查出口 IP（通过 Clash 代理）
+        exit_ip = ""
+        try:
+            proxy_handler = urllib.request.ProxyHandler({
+                "https": "http://127.0.0.1:7890"})
+            opener = urllib.request.build_opener(proxy_handler)
+            ip_req = urllib.request.Request("https://api.ip.sb/ip")
+            with opener.open(ip_req, timeout=5) as ip_resp:
+                exit_ip = ip_resp.read().decode().strip()
+        except Exception:
+            exit_ip = "?"
+        logger.info("Clash 切换节点: %s → %s  IP: %s", _last_clash_node or "初始", chosen, exit_ip)
         return chosen
     except Exception as e:
         logger.warning("Clash 节点切换失败: %s", e)
