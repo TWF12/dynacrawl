@@ -97,15 +97,15 @@
                     </div>
                     <div class="live-progress live-partial" v-if="selectedTask.status==='partial'">
                         <div class="progress-bar progress-bar-lg"><div class="progress-fill partial progress-fill-full">100%</div></div>
-                        <div class="live-msg">任务完成(异常) — 部分数据来自保底机制，详见URL采集状态</div>
+                        <div class="live-msg">任务异常完成</div>
                     </div>
                     <div class="live-progress live-done" v-if="selectedTask.status==='completed'">
-                        <div class="progress-bar progress-bar-lg"><div class="progress-fill completed" class="progress-fill-full">100%</div></div>
+                        <div class="progress-bar progress-bar-lg"><div class="progress-fill completed progress-fill-full">100%</div></div>
                         <div class="live-msg">任务已完成</div>
                     </div>
                     <div class="live-progress live-failed" v-if="selectedTask.status==='failed'">
-                        <div class="progress-bar progress-bar-lg"><div class="progress-fill failed" class="progress-fill-full">100%</div></div>
-                        <div class="live-msg">任务失败 — 详见URL采集状态</div>
+                        <div class="progress-bar progress-bar-lg"><div class="progress-fill failed progress-fill-full">100%</div></div>
+                        <div class="live-msg">任务失败</div>
                     </div>
 
                     <h4>URL采集状态</h4>
