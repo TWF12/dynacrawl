@@ -72,16 +72,14 @@ const app = createApp({
                     const d = JSON.parse(event.data);
                     if (d.type === "pong") return;
                     if (d.type === "progress" || d.type === "complete") {
+                        console.log("WS progress:", d.completed_urls + "/" + d.total_urls, d.message);
                         wsProgress.percent = d.total_urls > 0 ? Math.round(d.completed_urls / d.total_urls * 100) : 0;
                         wsProgress.message = d.message || "";
-                        // 防抖：取消上次待执行的刷新，500ms 后同时刷新详情和任务列表
-                        if (_lastWsUpdate) clearTimeout(_lastWsUpdate);
-                        _lastWsUpdate = setTimeout(function () {
-                            loadTaskDetail(d.task_id);
-                            loadTasks();
-                        }, 500);
+                        // 直接刷新详情和任务列表，每条消息都更新
+                        loadTaskDetail(d.task_id);
+                        loadTasks();
                     }
-                } catch (e) { console.error(e); }
+                } catch (e) { console.error("WS error:", e); }
             };
             wsHeartbeat = setInterval(function () {
                 if (wsConnection && wsConnection.readyState === WebSocket.OPEN) wsConnection.send("ping");
