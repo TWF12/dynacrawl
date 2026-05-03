@@ -12,9 +12,7 @@ from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
-# 翻页并发数（=1 串行，B站风控严格，并发 2 即触发验证码）
 FETCH_CONCURRENCY = 1
-
 # 进度回调: (current, total, message)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
@@ -43,7 +41,7 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 ac = card.get("archive_count", 0)
                 if ac and isinstance(ac, int) and ac > 0:
                     result["video_count"] = ac
-                    return result  # card API 已拿到，直接返回
+                    return result
             else:
                 errors.append("API 请求失败")
         else:
@@ -100,14 +98,100 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
     return result
 
 
-def _pick_status(errors: list[str], has_data: bool) -> str:
-    """根据 errors 和数据有无判断状态: ok / fallback / failed"""
-    if not errors:
-        return "ok"
-    if has_data:
-        return "fallback"
-    return "failed"
+# ============================================================
+# DOM 兜底提取
+# ============================================================
 
+async def _dom_extract(page: Page, uid: str, seen_bvids: set) -> list[dict]:
+    """从当前页面 DOM 提取所有可见的视频卡片"""
+    try:
+        raw = await page.evaluate("""
+            () => {
+                let results = [];
+                let links = document.querySelectorAll('a[href*="/video/BV"]');
+                links.forEach(a => {
+                    let href = a.getAttribute('href') || '';
+                    let bvMatch = href.match(/BV[A-Za-z0-9]{10}/);
+                    if (!bvMatch) return;
+                    let bvid = bvMatch[0];
+                    let img = a.querySelector('img');
+                    let title = img ? (img.getAttribute('alt') || '').trim() : '';
+                    let rawText = (a.textContent || '').trim();
+                    let playMatch = rawText.match(/([\\d.]+万?)/);
+                    let play = playMatch ? playMatch[1] : '0';
+                    results.push({bvid, title, play});
+                });
+                return results;
+            }
+        """)
+        videos = []
+        for item in raw:
+            bvid = item.get("bvid", "")
+            if bvid and bvid not in seen_bvids:
+                seen_bvids.add(bvid)
+                title = (item.get("title") or "").strip()
+                play_str = (item.get("play") or "0").strip()
+                try:
+                    n = float(play_str.replace("万", "").replace(",", ""))
+                    play = round(n * 10000) if "万" in play_str else int(n)
+                except (ValueError, TypeError):
+                    play = 0
+                videos.append({"bvid": bvid, "title": title, "play": play})
+        return videos
+    except Exception:
+        return []
+
+
+async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
+    """滚动页面触发懒加载，返回滚动后新增的可见链接数"""
+    before = await page.evaluate(
+        "document.querySelectorAll('a[href*=\"/video/BV\"]').length")
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await asyncio.sleep(2)
+    after = await page.evaluate(
+        "document.querySelectorAll('a[href*=\"/video/BV\"]').length")
+    return after - before
+
+
+async def _dom_fallback(context, uid: str, seen_bvids: set, page1) -> tuple[list[dict], int]:
+    """多页面试探 DOM 兜底提取视频，返回 (videos, total_count)"""
+    all_videos = []
+    total_count = 0
+
+    urls_to_try = [
+        f"https://space.bilibili.com/{uid}/video?tid=0&pn=1&keyword=&order=pubdate",
+        f"https://space.bilibili.com/{uid}",
+    ]
+
+    for attempt_url in urls_to_try:
+        try:
+            await page1.goto(attempt_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            await page1.wait_for_timeout(3000)
+
+            # 提取视频数和视频列表
+            total_count = await _get_video_count_from_page(page1, uid) or total_count
+            videos = await _dom_extract(page1, uid, seen_bvids)
+            all_videos.extend(videos)
+
+            if all_videos:
+                # 滚动翻页
+                for _ in range(10):
+                    new_count = await _dom_scroll_for_more(page1)
+                    if new_count == 0:
+                        break
+                    await random_delay()
+                    more = await _dom_extract(page1, uid, seen_bvids)
+                    all_videos.extend(more)
+                break  # 成功获取到数据，停止尝试其他 URL
+        except Exception:
+            continue
+
+    return all_videos, total_count
+
+
+# ============================================================
+# 视频列表主函数
+# ============================================================
 
 PageDoneCallback = Callable[[list[dict], int], Awaitable[None]]
 
@@ -136,11 +220,11 @@ async def scrape_up_videos(
     async with browser_pool.acquire_headful_context() as context:
         page1 = await context.new_page()
         try:
-            # 第 1 页：加载投稿页，拦截 arc/search 获取首页数据 + mixin_key
+            # 第 1 页：加载投稿页，尝试 arc/search
             upload_url = f"https://space.bilibili.com/{uid}/upload/video"
             resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             if not resp or not resp.ok:
-                errors.append(f"页面加载失败 status={resp.status if resp else 'None'}")
+                errors.append("页面加载失败")
                 return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
             await page1.wait_for_timeout(3000)
 
@@ -151,17 +235,15 @@ async def scrape_up_videos(
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
                 return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
 
-            # 首页数据：先尝试 arc/search API，失败则回退 DOM 提取
+            # 首页数据：先尝试 arc/search API，失败则 DOM 兜底
             page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
             if not page1_data:
-                # arc/search 失败 → DOM 兜底提取（页面可能仍有可见的视频卡片）
-                total_count = await _get_video_count_from_page(page1, uid)
-                dom_videos = await _extract_videos_from_page_dom(page1)
+                # arc/search 失败 → 多页面 DOM 兜底
+                logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
+                dom_videos, dom_total = await _dom_fallback(context, uid, seen_bvids, page1)
                 for v in dom_videos:
-                    bvid = v.get("bvid", "")
-                    if bvid and bvid not in seen_bvids:
-                        seen_bvids.add(bvid)
-                        videos.append(v)
+                    videos.append(v)
+                total_count = dom_total or await _get_video_count_from_page(page1, uid)
                 if total_count:
                     errors.append(f"DOM 提取 {len(videos)} 条, 总数 {total_count}")
                 elif len(videos) > 0:
@@ -180,14 +262,14 @@ async def scrape_up_videos(
             logger.info("第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
                         len(videos), uid, total_count, total_pages)
 
-            await _save_page(videos[:])  # 首页数据立即回传
+            await _save_page(videos[:])
 
             if progress_callback:
                 await progress_callback(1, total_pages,
                                         f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
 
             await page1.close()
-            page1 = None  # 标记已关闭，避免 finally 重复关闭
+            page1 = None
 
             # 第 2 页起：并发请求
             if total_pages <= 1:
@@ -197,7 +279,7 @@ async def scrape_up_videos(
             sem = asyncio.Semaphore(FETCH_CONCURRENCY)
 
             async def _fetch_one_page(pn: int):
-                await random_delay()  # 延迟在信号量之外，确保请求自然错开
+                await random_delay()
                 async with sem:
                     pg = await context.new_page()
                     try:
@@ -219,7 +301,7 @@ async def scrape_up_videos(
                         _process_arc_data(data, videos, seen_bvids)
                         new_vids = videos[before:]
                         if new_vids:
-                            await _save_page(new_vids)  # 该页数据立即回传
+                            await _save_page(new_vids)
                     else:
                         page_errors += 1
                 except Exception as exc:
@@ -246,11 +328,16 @@ async def scrape_up_videos(
             if page1 is not None:
                 await page1.close()
 
-    return {"videos": videos, "total_count": total_count, "errors": errors}
+    return {"videos": videos, "total_count": total_count, "errors": errors,
+            "status": _pick_status(errors, len(videos) > 0)}
 
+
+# ============================================================
+# 工具函数
+# ============================================================
 
 async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:
-    """用 page.goto 调 arc/search API（设 Referer 头代替访问空间页，避免多余请求）"""
+    """用 page.goto 调 arc/search API（设 Referer 头）"""
     params = sign_params({
         "mid": uid, "ps": "50", "pn": str(pn),
         "tid": "0", "keyword": "", "order": "pubdate",
@@ -275,85 +362,6 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     return None
 
 
-async def _extract_videos_from_page_dom(page: Page) -> list[dict]:
-    """从 /upload/video 页面 DOM 提取视频卡片（arc/search API 失败时的兜底方案）"""
-    try:
-        items = await page.evaluate("""
-            () => {
-                let results = [];
-                let links = document.querySelectorAll('a[href*="/video/BV"]');
-                links.forEach(a => {
-                    let href = a.getAttribute('href') || '';
-                    let bvMatch = href.match(/BV[A-Za-z0-9]{10}/);
-                    if (!bvMatch) return;
-                    let bvid = bvMatch[0];
-                    // 标题：封面 img.alt
-                    let img = a.querySelector('img');
-                    let title = img ? (img.getAttribute('alt') || '').trim() : '';
-                    // 播放量：a.textContent 第一个数字
-                    let raw = (a.textContent || '').trim();
-                    let playMatch = raw.match(/([\\d.]+万?)/);
-                    let play = playMatch ? playMatch[1] : '0';
-                    results.push({bvid, title, play});
-                });
-                return results;
-            }
-        """)
-        videos = []
-        seen = set()
-        for item in items:
-            bvid = item.get("bvid", "")
-            if bvid and bvid not in seen:
-                seen.add(bvid)
-                title = (item.get("title") or "").strip()
-                play_str = (item.get("play") or "0").strip()
-                try:
-                    n = float(play_str.replace("万", "").replace(",", ""))
-                    play = round(n * 10000) if "万" in play_str else int(n)
-                except (ValueError, TypeError):
-                    play = 0
-                videos.append({"bvid": bvid, "title": title, "play": play})
-        return videos
-    except Exception:
-        return []
-
-
-async def _get_video_count_from_page(page: Page, uid: str) -> int:
-    """从 /upload/video 页面的 sidebar 提取视频总数（即使视频列表为空也能获取）"""
-    try:
-        count = await page.evaluate("""
-            () => {
-                // sidebar: .side-nav__item.active 内的 .side-nav__item__sub-text
-                let activeItem = document.querySelector('.side-nav__item.active');
-                if (activeItem) {
-                    let subText = activeItem.querySelector('.side-nav__item__sub-text');
-                    if (subText) {
-                        let n = parseInt((subText.textContent || '').trim());
-                        if (n > 0) return n;
-                    }
-                }
-                // 所有 side-nav__item 中匹配"视频"的
-                let items = document.querySelectorAll('.side-nav__item');
-                for (let item of items) {
-                    let text = (item.textContent || '').trim();
-                    let m = text.match(/视频\\s*(\\d+)/);
-                    if (m) return parseInt(m[1]);
-                }
-                // 旧版 tab 选择器兜底
-                let tabs = document.querySelectorAll('.nav-tab__item');
-                for (let tab of tabs) {
-                    let text = (tab.textContent || '').trim();
-                    let m = text.match(/投稿\\s*(\\d+)/);
-                    if (m) return parseInt(m[1]);
-                }
-                return 0;
-            }
-        """)
-        return count or 0
-    except Exception:
-        return 0
-
-
 def _process_arc_data(data: dict, videos: list[dict], seen_bvids: set) -> int:
     """从 arc/search 响应 data 中提取视频，返回 total_count"""
     total = data.get("page", {}).get("count", 0)
@@ -368,3 +376,45 @@ def _process_arc_data(data: dict, videos: list[dict], seen_bvids: set) -> int:
                 "play": v.get("play", 0),
             })
     return total
+
+
+def _pick_status(errors: list[str], has_data: bool) -> str:
+    """根据 errors 和数据有无判断状态: ok / fallback / failed"""
+    if not errors:
+        return "ok"
+    if has_data:
+        return "fallback"
+    return "failed"
+
+
+async def _get_video_count_from_page(page: Page, uid: str) -> int:
+    """从页面的 sidebar 提取视频总数"""
+    try:
+        count = await page.evaluate("""
+            () => {
+                let activeItem = document.querySelector('.side-nav__item.active');
+                if (activeItem) {
+                    let subText = activeItem.querySelector('.side-nav__item__sub-text');
+                    if (subText) {
+                        let n = parseInt((subText.textContent || '').trim());
+                        if (n > 0) return n;
+                    }
+                }
+                let items = document.querySelectorAll('.side-nav__item');
+                for (let item of items) {
+                    let text = (item.textContent || '').trim();
+                    let m = text.match(/视频\\s*(\\d+)/);
+                    if (m) return parseInt(m[1]);
+                }
+                let tabs = document.querySelectorAll('.nav-tab__item');
+                for (let tab of tabs) {
+                    let text = (tab.textContent || '').trim();
+                    let m = text.match(/投稿\\s*(\\d+)/);
+                    if (m) return parseInt(m[1]);
+                }
+                return 0;
+            }
+        """)
+        return count or 0
+    except Exception:
+        return 0
