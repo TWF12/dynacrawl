@@ -128,9 +128,14 @@ async def scrape_up_videos(
             # 首页数据
             page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
             if not page1_data:
-                errors.append(format_error(E104_NO_VIDEOS_AT_ALL, "首页 arc/search 无响应"))
-                logger.warning("首页 arc/search 无数据 uid=%s", uid)
-                return {"videos": videos, "total_count": 0, "errors": errors}
+                # arc/search 失败，尝试从页面 DOM 提取视频总数
+                total_count = await _get_video_count_from_page(page1, uid)
+                if total_count:
+                    logger.warning("arc/search 无响应，但从页面获取到视频总数 %d uid=%s", total_count, uid)
+                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL, f"从页面获取到总数 {total_count}"))
+                else:
+                    errors.append(format_error(E104_NO_VIDEOS_AT_ALL))
+                return {"videos": videos, "total_count": total_count, "errors": errors}
 
             total_count = _process_arc_data(page1_data, videos, seen_bvids)
             ps = page1_data.get("page", {}).get("ps", 50)
@@ -228,6 +233,30 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
     return None
+
+
+async def _get_video_count_from_page(page: Page, uid: str) -> int:
+    """从 /upload/video 页面的 sidebar tab 提取视频总数（即使视频列表为空也能获取）"""
+    try:
+        count = await page.evaluate("""
+            () => {
+                // 优先从"投稿XX"tab 的数字提取
+                let tabs = document.querySelectorAll('.nav-tab__item');
+                for (let tab of tabs) {
+                    let text = (tab.textContent || '').trim();
+                    let m = text.match(/投稿\\s*(\\d+)/);
+                    if (m) return parseInt(m[1]);
+                }
+                // 从 body text 匹配 "视频 X" 或 "投稿 X"
+                let bodyText = document.body.textContent || '';
+                let m = bodyText.match(/(?:视频|投稿)\\s*(\\d+)/);
+                if (m) return parseInt(m[1]);
+                return 0;
+            }
+        """)
+        return count or 0
+    except Exception:
+        return 0
 
 
 def _process_arc_data(data: dict, videos: list[dict], seen_bvids: set) -> int:
