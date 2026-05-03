@@ -17,11 +17,11 @@ const app = createApp({
         let _lastWsUpdate = 0;
 
         function statusTagClass(status) {
-            const m = { pending: "tag-blue", running: "tag-yellow", processing: "tag-yellow", completed: "tag-green", failed: "tag-red" };
+            const m = { pending: "tag-blue", running: "tag-yellow", processing: "tag-yellow", completed: "tag-green", partial: "tag-orange", failed: "tag-red" };
             return m[status] || "tag-blue";
         }
         function statusLabel(status) {
-            const m = { pending: "等待中", running: "运行中", processing: "处理中", completed: "已完成", failed: "失败" };
+            const m = { pending: "等待中", running: "运行中", processing: "处理中", completed: "已完成", partial: "异常", failed: "失败" };
             return m[status] || status;
         }
 
@@ -121,7 +121,7 @@ const app = createApp({
         function _startAutoRefresh() {
             if (_taskListTimer) return;
             _taskListTimer = setInterval(async function () {
-                const hasRunning = tasks.value.some(t => t.status === "running" || t.status === "processing");
+                const hasRunning = tasks.value.some(t => t.status === "pending" || t.status === "running" || t.status === "processing");
                 if (hasRunning) {
                     await loadTasks();
                     // 如果正在查看详情且任务已完成，刷新详情

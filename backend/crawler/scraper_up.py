@@ -99,8 +99,18 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
 
     if errors:
         result["errors"] = errors
+    result["status"] = _pick_status(errors, result["video_count"] > 0)
 
     return result
+
+
+def _pick_status(errors: list[str], has_data: bool) -> str:
+    """根据 errors 和数据有无判断状态: ok / fallback / failed"""
+    if not errors:
+        return "ok"
+    if has_data:
+        return "fallback"
+    return "failed"
 
 
 PageDoneCallback = Callable[[list[dict], int], Awaitable[None]]
@@ -135,7 +145,7 @@ async def scrape_up_videos(
             resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             if not resp or not resp.ok:
                 errors.append(f"页面加载失败 status={resp.status if resp else 'None'}")
-                return {"videos": videos, "total_count": 0, "errors": errors}
+                return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
             await page1.wait_for_timeout(3000)
 
             # 获取 mixin_key
@@ -143,7 +153,7 @@ async def scrape_up_videos(
             if not mixin_key:
                 errors.append("WBI 密钥获取失败")
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
-                return {"videos": videos, "total_count": 0, "errors": errors}
+                return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
 
             # 首页数据：先尝试 arc/search API，失败则回退 DOM 提取
             page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
@@ -162,7 +172,8 @@ async def scrape_up_videos(
                     errors.append(f"arc/search 无响应, DOM 兜底获取 {len(videos)} 条")
                 else:
                     errors.append("arc/search 无响应且页面无视频")
-                return {"videos": videos, "total_count": total_count, "errors": errors}
+                return {"videos": videos, "total_count": total_count, "errors": errors,
+                        "status": _pick_status(errors, len(videos) > 0)}
 
             total_count = _process_arc_data(page1_data, videos, seen_bvids)
             ps = page1_data.get("page", {}).get("ps", 50)
@@ -184,7 +195,8 @@ async def scrape_up_videos(
 
             # 第 2 页起：并发请求
             if total_pages <= 1:
-                return {"videos": videos, "total_count": total_count, "errors": errors}
+                return {"videos": videos, "total_count": total_count, "errors": errors,
+                        "status": _pick_status(errors, len(videos) > 0)}
 
             sem = asyncio.Semaphore(FETCH_CONCURRENCY)
 

@@ -142,13 +142,15 @@ async def process_url_message(
         if url_record:
             url_record.updated_at = datetime.now()
             scrape_errors = []
+            scraper_status = "completed"  # 默认
             if isinstance(result, dict):
                 scrape_errors = result.get("errors", [])
+                scraper_status = result.get("status", "completed")
             if scrape_errors:
                 url_record.error_msg = "; ".join(scrape_errors)
-                url_record.status = "failed"
-            else:
-                url_record.status = "completed"
+            # status 映射: ok→completed, fallback→partial, failed→failed
+            url_record.status = {"ok": "completed", "fallback": "partial", "failed": "failed"}.get(
+                scraper_status, "completed")
 
         task = await session.get(Task, task_id)
         if task:
