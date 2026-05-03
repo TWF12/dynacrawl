@@ -71,17 +71,18 @@ async def process_url_message(
                             f"视频采集: {message}",
                         )
 
-                videos = await scrape_up_videos(
+                result = await scrape_up_videos(
                     page, msg.get("uid", ""),
                     progress_callback=_video_progress,
                 )
+                videos = result.get("videos", [])
                 for v in videos:
                     session.add(VideoInfo(
                         task_id=task_id, bv_id=v.get("bvid", ""),
                         title=v.get("title", ""), play_count=v.get("play"),
                         raw_data=v,
                     ))
-                result = {"video_count": len(videos)}
+                video_errors = result.get("errors", [])
 
                 # 双写兼容：不覆盖 up_api 已写好的真实视频总数
                 up_result = await session.execute(
@@ -127,6 +128,12 @@ async def process_url_message(
         if url_record:
             url_record.status = "completed"
             url_record.updated_at = datetime.now()
+            # 存储错误码
+            scrape_errors = []
+            if isinstance(result, dict):
+                scrape_errors = result.get("errors", [])
+            if scrape_errors:
+                url_record.error_msg = "; ".join(scrape_errors)
 
         task = await session.get(Task, task_id)
         if task:

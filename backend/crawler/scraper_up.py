@@ -9,6 +9,13 @@ from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
+from backend.crawler.error_codes import (
+    E001_CARD_API_FAILED, E002_VIDEO_COUNT_FAILED,
+    E101_ARC_SEARCH_BLOCKED, E102_ARC_SEARCH_HTTP_ERR,
+    E103_VIDEO_INCOMPLETE, E104_NO_VIDEOS_AT_ALL, E105_NO_LOGIN_COOKIE,
+    E201_NETWORK_TIMEOUT, E202_PAGE_LOAD_FAILED, E203_WBI_KEY_FAILED,
+    format_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +27,12 @@ VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
 
 async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
-    """爬取 UP 主基本信息 + 从 arc/search 提前获取视频总数"""
+    """爬取 UP 主基本信息 + 多途径获取真实视频总数"""
     result = {"uid": uid, "video_count": 0}
+    errors = []
     await random_delay()
     try:
-        # card API 获取基本信息
+        # 1. card API 获取基本信息 + archive_count
         await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         await random_delay()
 
@@ -39,33 +47,50 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 result["avatar_url"] = card.get("face", "")
                 result["follower_count"] = card.get("fans", 0)
                 result["raw_data"] = card
+                # card API 返回的 archive_count 优先使用
+                ac = card.get("archive_count", 0)
+                if ac and isinstance(ac, int) and ac > 0:
+                    result["video_count"] = ac
+            else:
+                errors.append(E001_CARD_API_FAILED)
+        else:
+            errors.append(E001_CARD_API_FAILED)
 
-        # 尝试从 card API 的 archive_count 获取视频数
-        archive_count = (
-            result.get("raw_data", {}).get("archive_count")
-            if isinstance(result.get("raw_data"), dict) else None
-        )
-        if archive_count and isinstance(archive_count, int) and archive_count > 0:
-            result["video_count"] = archive_count
-            return result
+        # 2. 如果 card API 没拿到 video_count，用 arc/search?ps=1
+        if result["video_count"] == 0:
+            mixin_key = await get_mixin_key(page)
+            if mixin_key:
+                params = sign_params({
+                    "mid": uid, "ps": "1", "pn": "1",
+                    "tid": "0", "keyword": "", "order": "pubdate",
+                }, mixin_key)
+                api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
+                resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                if resp and resp.ok:
+                    body_text = await page.evaluate("() => document.body.innerText")
+                    data = json.loads(body_text)
+                    if data.get("code") == 0:
+                        total = data.get("data", {}).get("page", {}).get("count", 0)
+                        if total:
+                            result["video_count"] = total
+                    elif data.get("code") == -799 or data.get("code") == -352:
+                        errors.append(E101_ARC_SEARCH_BLOCKED)
+                    else:
+                        errors.append(E002_VIDEO_COUNT_FAILED)
+                elif resp and resp.status == 412:
+                    errors.append(E101_ARC_SEARCH_BLOCKED)
+                else:
+                    errors.append(E102_ARC_SEARCH_HTTP_ERR)
+            else:
+                errors.append(E203_WBI_KEY_FAILED)
 
-        # 降级：用 WBI arc/search?ps=1 获取总数
-        mixin_key = await get_mixin_key(page)
-        if mixin_key:
-            params = sign_params({
-                "mid": uid, "ps": "1", "pn": "1",
-                "tid": "0", "keyword": "", "order": "pubdate",
-            }, mixin_key)
-            api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
-            resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            if resp and resp.ok:
-                body_text = await page.evaluate("() => document.body.innerText")
-                data = json.loads(body_text)
-                if data.get("code") == 0:
-                    total = data.get("data", {}).get("page", {}).get("count", 0)
-                    result["video_count"] = total or 0
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
+        errors.append(E201_NETWORK_TIMEOUT)
+
+    if errors:
+        result["errors"] = errors
+
     return result
 
 
@@ -74,9 +99,11 @@ async def scrape_up_videos(
     uid: str,
     max_pages: int = 0,
     progress_callback: Optional[VideoProgressCallback] = None,
-) -> list[dict]:
-    """爬取 UP 主的视频列表（并发翻页 arc/search API + 进度回调）"""
+) -> dict:
+    """爬取 UP 主的视频列表，返回 {videos, total_count, errors}"""
     videos = []
+    errors: list[str] = []
+    total_count = 0
     seen_bvids: set = set()
     await random_delay()
 
@@ -87,20 +114,23 @@ async def scrape_up_videos(
             upload_url = f"https://space.bilibili.com/{uid}/upload/video"
             resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
             if not resp or not resp.ok:
-                return videos
+                errors.append(format_error(E202_PAGE_LOAD_FAILED, f"status={resp.status if resp else 'None'}"))
+                return {"videos": videos, "total_count": 0, "errors": errors}
             await page1.wait_for_timeout(3000)
 
             # 获取 mixin_key
             mixin_key = await get_mixin_key(page1)
             if not mixin_key:
+                errors.append(format_error(E203_WBI_KEY_FAILED))
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
-                return videos
+                return {"videos": videos, "total_count": 0, "errors": errors}
 
-            # 用 page.evaluate + fetch 获取首页数据（保证 cookie 和 referer 正确）
+            # 首页数据
             page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
             if not page1_data:
+                errors.append(format_error(E104_NO_VIDEOS_AT_ALL, "首页 arc/search 无响应"))
                 logger.warning("首页 arc/search 无数据 uid=%s", uid)
-                return videos
+                return {"videos": videos, "total_count": 0, "errors": errors}
 
             total_count = _process_arc_data(page1_data, videos, seen_bvids)
             ps = page1_data.get("page", {}).get("ps", 50)
@@ -120,7 +150,7 @@ async def scrape_up_videos(
 
             # 第 2 页起：并发请求
             if total_pages <= 1:
-                return videos
+                return {"videos": videos, "total_count": total_count, "errors": errors}
 
             sem = asyncio.Semaphore(FETCH_CONCURRENCY)
 
@@ -158,19 +188,20 @@ async def scrape_up_videos(
                     )
 
             if errors:
-                logger.warning("并发翻页 %d 页失败 uid=%s", errors, uid)
+                logger.warning("翻页失败数: %d uid=%s", errors, uid)
 
             if total_count and len(videos) < total_count:
-                logger.warning("视频数不完整 uid=%s: 获取 %d / 应有 %d",
-                               uid, len(videos), total_count)
+                errors.append(format_error(E103_VIDEO_INCOMPLETE,
+                                           f"获取 {len(videos)}/{total_count}"))
 
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
+            errors.append(format_error(E201_NETWORK_TIMEOUT, str(exc)[:200]))
         finally:
             if page1 is not None:
                 await page1.close()
 
-    return videos
+    return {"videos": videos, "total_count": total_count, "errors": errors}
 
 
 async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:

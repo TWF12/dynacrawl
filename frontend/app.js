@@ -135,7 +135,7 @@ const app = createApp({
                         }
                     }
                 }
-            }, 3000);
+            }, 1500);
         }
         onMounted(function () { loadTasks(); _startAutoRefresh(); });
         onUnmounted(function () { if (wsConnection) wsConnection.close(); if (_taskListTimer) clearInterval(_taskListTimer); });
