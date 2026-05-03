@@ -108,52 +108,72 @@ WebGLRenderingContext.prototype.getParameter = function(p) {
 
 
 # Clash 代理自动轮换
-CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "")
+CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090")
+CLASH_PROXY = os.environ.get("CLASH_PROXY", "http://127.0.0.1:7890")
 CLASH_GROUP = os.environ.get("CLASH_GROUP", "")
 _last_clash_node = None
+_clash_groups_cache = None
+
+
+def _auto_detect_group() -> str | None:
+    """未指定 CLASH_GROUP 时自动检测第一个非 DIRECT/REJECT 的选择组"""
+    global _clash_groups_cache
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{CLASH_CONTROLLER}/proxies")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        proxies = data.get("proxies", {})
+        for name, info in proxies.items():
+            if info.get("type") in ("Selector", "URLTest", "Fallback"):
+                if name not in ("DIRECT", "REJECT", "🐟漏网之鱼", "🛑广告拦截"):
+                    _clash_groups_cache = list(proxies.keys())
+                    logger.info("Clash 自动检测代理组: %s", name)
+                    return name
+    except Exception:
+        pass
+    return None
 
 
 def _rotate_clash_proxy() -> str | None:
-    """通过 Clash API 切换代理组节点，返回新节点名。需要 CLASH_CONTROLLER 和 CLASH_GROUP 环境变量"""
+    """通过 Clash API 切换代理组节点，返回新节点名"""
     global _last_clash_node
-    if not CLASH_CONTROLLER or not CLASH_GROUP:
-        return None
     try:
+        group = CLASH_GROUP or _auto_detect_group()
+        if not group:
+            return None
+
         import urllib.request
-        # 获取代理组信息
-        url = f"{CLASH_CONTROLLER}/proxies/{CLASH_GROUP}"
+        url = f"{CLASH_CONTROLLER}/proxies/{group}"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
         all_nodes = data.get("all", [])
         if len(all_nodes) <= 1:
             return None
-        # 随机选一个不同于上次的节点
         candidates = [n for n in all_nodes if n != _last_clash_node]
         if not candidates:
             candidates = all_nodes
         chosen = random.choice(candidates)
-        # 切换
         switch_req = urllib.request.Request(
             url, data=json.dumps({"name": chosen}).encode(),
             headers={"Content-Type": "application/json"}, method="PUT")
         urllib.request.urlopen(switch_req, timeout=5)
         _last_clash_node = chosen
-        # 查出口 IP（通过 Clash 代理）
+
+        # 查出口 IP
         exit_ip = ""
         try:
-            proxy_handler = urllib.request.ProxyHandler({
-                "https": "http://127.0.0.1:7890"})
+            proxy_handler = urllib.request.ProxyHandler({"https": CLASH_PROXY})
             opener = urllib.request.build_opener(proxy_handler)
-            ip_req = urllib.request.Request("https://api.ip.sb/ip")
-            with opener.open(ip_req, timeout=5) as ip_resp:
-                exit_ip = ip_resp.read().decode().strip()
+            with opener.open(urllib.request.Request("https://api.ip.sb/ip"), timeout=5) as r:
+                exit_ip = r.read().decode().strip()
         except Exception:
             exit_ip = "?"
         logger.info("Clash 切换节点: %s → %s  IP: %s", _last_clash_node or "初始", chosen, exit_ip)
         return chosen
     except Exception as e:
-        logger.warning("Clash 节点切换失败: %s", e)
+        logger.debug("Clash 节点切换失败: %s", e)
     return None
 
 

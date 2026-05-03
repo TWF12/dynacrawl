@@ -20,7 +20,10 @@ PAGE_TIMEOUT = int(os.getenv("PAGE_TIMEOUT", "30000"))
 
 MAX_RETRY = int(os.getenv("MAX_RETRY", "2"))
 
-PROXY_LIST = [p.strip() for p in os.getenv("PROXY_LIST", "").split(",") if p.strip()]
+_raw_proxy = os.getenv("PROXY_LIST", "")
+if not _raw_proxy and os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090"):
+    _raw_proxy = os.environ.get("CLASH_PROXY", "http://127.0.0.1:7890")
+PROXY_LIST = [p.strip() for p in _raw_proxy.split(",") if p.strip()]
 
 QUEUE_KEY = os.getenv("QUEUE_KEY", "dynacrawl:queue")
 COOKIE_FILE = str(DATA_DIR / "bilibili_cookies.json")
