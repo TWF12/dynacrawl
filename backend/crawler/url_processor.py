@@ -63,7 +63,19 @@ async def process_url_message(
                         ))
 
             elif url_type == "up_video_list":
-                # 构建视频进度回调，映射到任务进度推送
+                total_videos = [0]  # 用 list 装 int 以便闭包修改
+
+                # 每页完成后立即存入数据库
+                async def _save_page(page_videos: list[dict], cumulative: int):
+                    for v in page_videos:
+                        session.add(VideoInfo(
+                            task_id=task_id, bv_id=v.get("bvid", ""),
+                            title=v.get("title", ""), play_count=v.get("play"),
+                            raw_data=v,
+                        ))
+                    total_videos[0] = cumulative + len(page_videos)
+                    await session.commit()  # 每页立即提交，后续页失败不丢已爬数据
+
                 async def _video_progress(current: int, total: int, message: str):
                     if progress_callback:
                         await progress_callback(
@@ -74,28 +86,30 @@ async def process_url_message(
                 result = await scrape_up_videos(
                     page, msg.get("uid", ""),
                     progress_callback=_video_progress,
+                    on_page_done=_save_page,
                 )
                 videos = result.get("videos", [])
-                for v in videos:
-                    session.add(VideoInfo(
-                        task_id=task_id, bv_id=v.get("bvid", ""),
-                        title=v.get("title", ""), play_count=v.get("play"),
-                        raw_data=v,
-                    ))
-                # 用 API 返回或 sidebar DOM 提取的真实总数
                 api_total = result.get("total_count", 0)
+
+                # 如果 on_page_done 未生效（旧逻辑兼容），统一存入
+                if not total_videos[0]:
+                    for v in videos:
+                        session.add(VideoInfo(
+                            task_id=task_id, bv_id=v.get("bvid", ""),
+                            title=v.get("title", ""), play_count=v.get("play"),
+                            raw_data=v,
+                        ))
 
                 up_result = await session.execute(
                     select(UpInfo).where(UpInfo.task_id == task_id))
                 up_info = up_result.scalars().first()
                 if up_info:
                     if up_info.video_count == 0:
-                        # 优先用 API/sidebar 拿到的真实总数，其次用实际爬取条数
-                        up_info.video_count = api_total or len(videos)
+                        up_info.video_count = api_total or total_videos[0] or len(videos)
                 else:
                     session.add(UpInfo(
                         task_id=task_id, uid=msg.get("uid", ""),
-                        video_count=api_total or len(videos),
+                        video_count=api_total or total_videos[0] or len(videos),
                     ))
 
             elif url_type == "video_api":

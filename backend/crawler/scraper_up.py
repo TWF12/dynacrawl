@@ -104,18 +104,29 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
     return result
 
 
+PageDoneCallback = Callable[[list[dict], int], Awaitable[None]]
+
+
 async def scrape_up_videos(
     page: Page,
     uid: str,
     max_pages: int = 0,
     progress_callback: Optional[VideoProgressCallback] = None,
+    on_page_done: Optional[PageDoneCallback] = None,
 ) -> dict:
-    """爬取 UP 主的视频列表，返回 {videos, total_count, errors}"""
+    """爬取 UP 主的视频列表，每页完成后通过 on_page_done 实时回传数据"""
     videos = []
     errors: list[str] = []
     total_count = 0
     seen_bvids: set = set()
     await random_delay()
+
+    async def _save_page(page_videos: list[dict]):
+        if on_page_done and page_videos:
+            try:
+                await on_page_done(page_videos, len(videos))
+            except Exception as exc:
+                logger.warning("实时回传失败: %s", exc)
 
     async with browser_pool.acquire_headful_context() as context:
         page1 = await context.new_page()
@@ -163,6 +174,8 @@ async def scrape_up_videos(
             logger.info("第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
                         len(videos), uid, total_count, total_pages)
 
+            await _save_page(videos[:])  # 首页数据立即回传
+
             if progress_callback:
                 await progress_callback(1, total_pages,
                                         f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
@@ -189,17 +202,21 @@ async def scrape_up_videos(
             remaining = list(range(2, total_pages + 1))
             tasks = [_fetch_one_page(pn) for pn in remaining]
             completed_pages = 1
-            errors = 0
+            page_errors = 0
 
             for coro in asyncio.as_completed(tasks):
                 try:
                     pn, data = await coro
                     if data:
+                        before = len(videos)
                         _process_arc_data(data, videos, seen_bvids)
+                        new_vids = videos[before:]
+                        if new_vids:
+                            await _save_page(new_vids)  # 该页数据立即回传
                     else:
-                        errors += 1
+                        page_errors += 1
                 except Exception as exc:
-                    errors += 1
+                    page_errors += 1
                     logger.warning("翻页失败 pn: %s", exc)
 
                 completed_pages += 1
@@ -209,8 +226,8 @@ async def scrape_up_videos(
                         f"第 {completed_pages}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
                     )
 
-            if errors:
-                logger.warning("翻页失败数: %d uid=%s", errors, uid)
+            if page_errors:
+                logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
 
             if total_count and len(videos) < total_count:
                 errors.append(f"视频列表不完整: 获取 {len(videos)}/{total_count}")
