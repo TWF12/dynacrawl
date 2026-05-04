@@ -5,7 +5,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, rotate_proxy_if_needed
+from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
@@ -288,7 +288,6 @@ async def scrape_up_videos(
 
             async def _fetch_one_page(pn: int):
                 await random_delay()
-                await rotate_proxy_if_needed()
                 async with sem:
                     pg = await context.new_page()
                     try:
