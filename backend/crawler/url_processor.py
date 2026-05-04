@@ -152,6 +152,12 @@ async def process_url_message(
                     ))
                 result = {"comment_count": len(comments)}
 
+        # 采集期间任务可能被删除(级联删除 URL 记录), 重新检查
+        task_still_exists = await session.get(Task, task_id)
+        if not task_still_exists:
+            logger.info("任务 %s 在采集期间被删除, 跳过后续更新", task_id)
+            return
+
         url_record = await session.get(UrlRecord, url_id)
         if url_record:
             url_record.updated_at = datetime.now()
