@@ -44,8 +44,9 @@ def _print_startup_warnings():
 
     # 代理检查
     clash_ctrl = os.environ.get("CLASH_CONTROLLER", "")
-    if PROXY_LIST:
-        logger.info("代理已配置: %d 个地址", len(PROXY_LIST))
+    proxy_list_raw = os.environ.get("PROXY_LIST", "")
+    if proxy_list_raw:
+        logger.info("代理已配置(PROXY_LIST): %d 个地址", len(PROXY_LIST))
     elif clash_ctrl:
         logger.info("Clash 代理模式: %s", clash_ctrl)
     else:
@@ -53,7 +54,7 @@ def _print_startup_warnings():
         warnings.append("  直连采集极易触发 B站 风控, 强烈建议配置代理")
 
     # Clash API 可达性 (仅当配置了 Clash 时检查)
-    if clash_ctrl and not PROXY_LIST:
+    if clash_ctrl and not proxy_list_raw:
         try:
             import urllib.request
             urllib.request.urlopen(f"{clash_ctrl}/proxies", timeout=3)
