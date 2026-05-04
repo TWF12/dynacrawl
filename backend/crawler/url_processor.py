@@ -56,111 +56,112 @@ async def process_url_message(
             await session.commit()
 
         result = None
-        async with browser_pool.acquire_page() as page:
-            if url_type == "up_api":
-                result = await scrape_up_info(page, msg.get("uid", ""))
-                if result:
-                    up_existing = await session.execute(
-                        select(UpInfo).where(UpInfo.task_id == task_id))
-                    up_row = up_existing.scalars().first()
-                    if up_row:
-                        up_row.nickname = result.get("nickname", "")
-                        up_row.avatar_url = result.get("avatar_url", "")
-                        up_row.follower_count = result.get("follower_count")
-                        # 用 API 返回的真实视频数覆盖
-                        if result.get("video_count", 0) > 0:
-                            up_row.video_count = result["video_count"]
-                        if result.get("raw_data"):
-                            up_row.raw_data = result.get("raw_data")
-                    else:
-                        session.add(UpInfo(
-                            task_id=task_id, uid=result.get("uid", ""),
-                            nickname=result.get("nickname", ""),
-                            avatar_url=result.get("avatar_url", ""),
-                            follower_count=result.get("follower_count"),
-                            video_count=result.get("video_count"),
+
+        # up_video_list 内部自行创建 headful context, 不要占 acquire_page 的 semaphore
+        # 否则 3 任务各占 2 槽 = 需要 6, BROWSER_CONCURRENCY=3 直接死锁
+        if url_type == "up_video_list":
+            total_videos = [0]
+
+            async def _save_page(page_videos: list[dict], cumulative: int):
+                session.expire_all()
+                if not await session.get(Task, task_id):
+                    return
+                for v in page_videos:
+                    session.add(VideoInfo(
+                        task_id=task_id, bv_id=v.get("bvid", ""),
+                        title=v.get("title", ""), play_count=v.get("play"),
+                        raw_data=v,
+                    ))
+                total_videos[0] = cumulative + len(page_videos)
+                await session.commit()
+
+            async def _video_progress(current: int, total: int, message: str):
+                if progress_callback:
+                    await progress_callback(
+                        task_id, 0, 0, 0,
+                        f"视频采集: {message}",
+                    )
+
+            result = await scrape_up_videos(
+                None, msg.get("uid", ""),
+                progress_callback=_video_progress,
+                on_page_done=_save_page,
+                task_id=task_id,
+            )
+            videos = result.get("videos", [])
+            api_total = result.get("total_count", 0)
+
+            if not total_videos[0]:
+                for v in videos:
+                    session.add(VideoInfo(
+                        task_id=task_id, bv_id=v.get("bvid", ""),
+                        title=v.get("title", ""), play_count=v.get("play"),
+                        raw_data=v,
+                    ))
+
+            up_result = await session.execute(
+                select(UpInfo).where(UpInfo.task_id == task_id))
+            up_info = up_result.scalars().first()
+            if up_info:
+                if up_info.video_count == 0:
+                    up_info.video_count = api_total or total_videos[0] or len(videos)
+            else:
+                session.add(UpInfo(
+                    task_id=task_id, uid=msg.get("uid", ""),
+                    video_count=api_total or total_videos[0] or len(videos),
+                ))
+
+        else:
+            async with browser_pool.acquire_page() as page:
+                if url_type == "up_api":
+                    result = await scrape_up_info(page, msg.get("uid", ""))
+                    if result:
+                        up_existing = await session.execute(
+                            select(UpInfo).where(UpInfo.task_id == task_id))
+                        up_row = up_existing.scalars().first()
+                        if up_row:
+                            up_row.nickname = result.get("nickname", "")
+                            up_row.avatar_url = result.get("avatar_url", "")
+                            up_row.follower_count = result.get("follower_count")
+                            if result.get("video_count", 0) > 0:
+                                up_row.video_count = result["video_count"]
+                            if result.get("raw_data"):
+                                up_row.raw_data = result.get("raw_data")
+                        else:
+                            session.add(UpInfo(
+                                task_id=task_id, uid=result.get("uid", ""),
+                                nickname=result.get("nickname", ""),
+                                avatar_url=result.get("avatar_url", ""),
+                                follower_count=result.get("follower_count"),
+                                video_count=result.get("video_count"),
+                                raw_data=result.get("raw_data"),
+                            ))
+
+                elif url_type == "video_api":
+                    result = await scrape_video_info(page, msg.get("bv_id", ""))
+                    if result:
+                        session.add(VideoInfo(
+                            task_id=task_id, bv_id=result.get("bv_id", ""),
+                            title=result.get("title", ""),
+                            play_count=result.get("play_count"),
+                            like_count=result.get("like_count"),
+                            coin_count=result.get("coin_count"),
+                            danmaku_count=result.get("danmaku_count"),
+                            comment_count=result.get("comment_count"),
                             raw_data=result.get("raw_data"),
                         ))
 
-            elif url_type == "up_video_list":
-                total_videos = [0]  # 用 list 装 int 以便闭包修改
-
-                # 每页完成后立即存入数据库
-                async def _save_page(page_videos: list[dict], cumulative: int):
-                    session.expire_all()
-                    if not await session.get(Task, task_id):
-                        return
-                    for v in page_videos:
-                        session.add(VideoInfo(
-                            task_id=task_id, bv_id=v.get("bvid", ""),
-                            title=v.get("title", ""), play_count=v.get("play"),
-                            raw_data=v,
+                elif url_type == "video_comments":
+                    comments = await scrape_video_comments(page, msg.get("bv_id", ""))
+                    for c in comments:
+                        session.add(Comment(
+                            task_id=task_id, bv_id=c.get("bv_id", ""),
+                            username=c.get("username", ""),
+                            content=c.get("content", ""),
+                            like_count=c.get("like_count"),
+                            posted_at=c.get("posted_at"),
                         ))
-                    total_videos[0] = cumulative + len(page_videos)
-                    await session.commit()  # 每页立即提交，后续页失败不丢已爬数据
-
-                async def _video_progress(current: int, total: int, message: str):
-                    if progress_callback:
-                        await progress_callback(
-                            task_id, 0, 0, 0,  # 不覆盖 URL 进度数字
-                            f"视频采集: {message}",
-                        )
-
-                result = await scrape_up_videos(
-                    page, msg.get("uid", ""),
-                    progress_callback=_video_progress,
-                    on_page_done=_save_page,
-                    task_id=task_id,
-                )
-                videos = result.get("videos", [])
-                api_total = result.get("total_count", 0)
-
-                # 如果 on_page_done 未生效（旧逻辑兼容），统一存入
-                if not total_videos[0]:
-                    for v in videos:
-                        session.add(VideoInfo(
-                            task_id=task_id, bv_id=v.get("bvid", ""),
-                            title=v.get("title", ""), play_count=v.get("play"),
-                            raw_data=v,
-                        ))
-
-                up_result = await session.execute(
-                    select(UpInfo).where(UpInfo.task_id == task_id))
-                up_info = up_result.scalars().first()
-                if up_info:
-                    if up_info.video_count == 0:
-                        up_info.video_count = api_total or total_videos[0] or len(videos)
-                else:
-                    session.add(UpInfo(
-                        task_id=task_id, uid=msg.get("uid", ""),
-                        video_count=api_total or total_videos[0] or len(videos),
-                    ))
-
-            elif url_type == "video_api":
-                result = await scrape_video_info(page, msg.get("bv_id", ""))
-                if result:
-                    session.add(VideoInfo(
-                        task_id=task_id, bv_id=result.get("bv_id", ""),
-                        title=result.get("title", ""),
-                        play_count=result.get("play_count"),
-                        like_count=result.get("like_count"),
-                        coin_count=result.get("coin_count"),
-                        danmaku_count=result.get("danmaku_count"),
-                        comment_count=result.get("comment_count"),
-                        raw_data=result.get("raw_data"),
-                    ))
-
-            elif url_type == "video_comments":
-                comments = await scrape_video_comments(page, msg.get("bv_id", ""))
-                for c in comments:
-                    session.add(Comment(
-                        task_id=task_id, bv_id=c.get("bv_id", ""),
-                        username=c.get("username", ""),
-                        content=c.get("content", ""),
-                        like_count=c.get("like_count"),
-                        posted_at=c.get("posted_at"),
-                    ))
-                result = {"comment_count": len(comments)}
+                    result = {"comment_count": len(comments)}
 
         # 采集期间任务可能被删除(级联删除 URL 记录), expire 后重新检查
         session.expire_all()

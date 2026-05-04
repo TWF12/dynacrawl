@@ -248,7 +248,7 @@ async def _init_session(ctx, uid: str) -> str | None:
 
 
 async def scrape_up_videos(
-    page: Page,
+    page: Optional[Page],
     uid: str,
     max_pages: int = 0,
     progress_callback: Optional[VideoProgressCallback] = None,
