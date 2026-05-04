@@ -13,8 +13,8 @@ USE_REDIS = os.getenv("USE_REDIS", "").lower() in ("1", "true", "yes")
 BROWSER_CONCURRENCY = int(os.getenv("BROWSER_CONCURRENCY", "3"))
 BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() not in ("0", "false", "no")
 
-REQUEST_DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN", "1.0"))
-REQUEST_DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX", "3.0"))
+REQUEST_DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN", "3.0"))
+REQUEST_DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX", "8.0"))
 
 PAGE_TIMEOUT = int(os.getenv("PAGE_TIMEOUT", "30000"))
 

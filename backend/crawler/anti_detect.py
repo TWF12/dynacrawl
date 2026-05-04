@@ -235,9 +235,9 @@ async def setup_page(page: Page):
     })
 
 
-async def rotate_proxy_if_needed():
-    """在创建新 context 前调用，自动轮换 Clash 节点"""
-    await _rotate_clash_proxy()
+async def rotate_proxy_if_needed() -> str | None:
+    """在创建新 context 或翻页间隔时调用，自动轮换 Clash 节点，返回新节点名"""
+    return await _rotate_clash_proxy()
 
 
 async def random_delay():

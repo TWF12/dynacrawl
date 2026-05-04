@@ -1,11 +1,12 @@
 import json
 import logging
 import asyncio
+import random
 from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay
+from backend.crawler.anti_detect import random_delay, rotate_proxy_if_needed
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
@@ -285,10 +286,28 @@ async def scrape_up_videos(
                         "status": _pick_status(errors, len(videos) > 0)}
 
             sem = asyncio.Semaphore(FETCH_CONCURRENCY)
+            completed_pages = 1
+            page_errors = 0
+
+            # 代理轮换间隔: 至少 3 页, 最多总页数 1/3, 由页数动态决定随机范围
+            def _next_rotate_interval() -> int:
+                upper = max(4, (total_pages - completed_pages) // 3 + 1)
+                return random.randint(3, min(15, upper))
+
+            _rotate_after = completed_pages + _next_rotate_interval()
 
             async def _fetch_one_page(pn: int):
                 await random_delay()
                 async with sem:
+                    nonlocal _rotate_after
+                    if completed_pages >= _rotate_after:
+                        new_node = await rotate_proxy_if_needed()
+                        if new_node:
+                            logger.info("第 %d 页后切换节点: %s", completed_pages, new_node)
+                            _rotate_after = completed_pages + _next_rotate_interval()
+                            await asyncio.sleep(random.uniform(2, 4))
+                        else:
+                            logger.warning("第 %d 页后节点切换未成功，跳过本次轮换", completed_pages)
                     pg = await context.new_page()
                     try:
                         data = await _fetch_arc_page(pg, uid, pn, mixin_key)
@@ -298,8 +317,6 @@ async def scrape_up_videos(
 
             remaining = list(range(2, total_pages + 1))
             tasks = [_fetch_one_page(pn) for pn in remaining]
-            completed_pages = 1
-            page_errors = 0
 
             for coro in asyncio.as_completed(tasks):
                 try:
