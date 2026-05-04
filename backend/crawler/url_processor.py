@@ -80,6 +80,9 @@ async def process_url_message(
 
                 # 每页完成后立即存入数据库
                 async def _save_page(page_videos: list[dict], cumulative: int):
+                    # 任务可能已被删除, 跳过写入
+                    if not await session.get(Task, task_id):
+                        return
                     for v in page_videos:
                         session.add(VideoInfo(
                             task_id=task_id, bv_id=v.get("bvid", ""),
@@ -216,6 +219,12 @@ async def process_url_message(
 
     except Exception as e:
         logger.error(f"{consumer_label}处理 URL {url_id} 失败: {e}")
+        await session.rollback()  # 先回滚损坏的事务
+        # 任务可能已被删除, 检查后再更新
+        task_exists = await session.get(Task, task_id)
+        if not task_exists:
+            logger.info("任务 %s 已删除, 跳过错误处理", task_id)
+            return
         try:
             url_record = await session.get(UrlRecord, url_id)
             if url_record:
