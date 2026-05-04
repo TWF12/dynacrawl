@@ -73,12 +73,13 @@ def _print_startup_warnings():
 async def lifespan(app: FastAPI):
     _print_startup_warnings()
 
+    logger.info("正在验证 Cookie...")
     await cookie_manager.validate_all()
     cookie_count = cookie_manager.count
     if cookie_count >= 2:
         logger.info("Cookie: %d 个有效 (自动轮换)", cookie_count)
     elif cookie_count == 1:
-        logger.info("Cookie: 1 个有效")
+        logger.info("Cookie: 1 个有效 (多账号可运行 save_cookie.py 添加)")
 
     logger.info("正在初始化数据库...")
     await init_db()

@@ -117,6 +117,8 @@ class CookieManager:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read())
                 if data.get("data", {}).get("isLogin"):
+                    uname = data["data"].get("uname", "?")
+                    logger.info("  %s → %s", filepath.name, uname)
                     valid.append(filepath)
                 else:
                     logger.warning("Cookie 已过期, 已删除: %s", filepath.name)
