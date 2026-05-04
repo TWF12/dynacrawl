@@ -206,7 +206,7 @@ dynacrawl/
 ├── pyproject.toml
 ├── data/
 │   ├── dynacrawl.db        # SQLite 数据库
-│   └── bilibili_cookies.json  # B站 登录 Cookie
+│   └── cookies/               # B站 登录 Cookie（多文件轮换）
 ├── backend/
 │   ├── main.py             # FastAPI 入口 + 启动检查
 │   ├── config.py           # 全局配置

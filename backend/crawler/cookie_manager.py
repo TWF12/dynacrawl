@@ -1,12 +1,10 @@
 """Cookie 管理器 — 多文件轮换 + 过期自动检测删除"""
 import json
-import os
 import logging
 import asyncio
-from pathlib import Path
 from typing import Optional
 
-from backend.config import COOKIE_DIR, COOKIE_FILE
+from backend.config import COOKIE_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -27,28 +25,17 @@ class CookieManager:
         self._current_file: Optional[Path] = None
 
     def _scan(self):
-        """扫描 cookie 目录, 优先多文件模式, 回退单文件兼容"""
         if self._initialized:
             return
         self._initialized = True
 
         COOKIE_DIR.mkdir(parents=True, exist_ok=True)
+        self._files = sorted(COOKIE_DIR.glob("*.json"))
 
-        # 优先扫描 cookies/ 目录
-        cookie_files = sorted(COOKIE_DIR.glob("*.json"))
-        if cookie_files:
-            self._files = cookie_files
-            logger.info("Cookie 多文件模式: %d 个文件", len(self._files))
-            return
-
-        # 回退: 旧的单文件模式
-        single = Path(COOKIE_FILE)
-        if single.exists():
-            self._files = [single]
-            logger.info("Cookie 单文件模式(兼容): %s", COOKIE_FILE)
-            return
-
-        logger.warning("未找到任何 Cookie 文件, 将无登录态运行")
+        if self._files:
+            logger.info("Cookie: %d 个文件", len(self._files))
+        else:
+            logger.warning("未找到任何 Cookie 文件, 将无登录态运行")
 
     @property
     def count(self) -> int:
