@@ -58,7 +58,7 @@ class CookieManager:
             with open(filepath, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.warning("加载 Cookie 失败 %s: %s", filepath.name, e)
+            logger.warning("Cookie 加载失败, 跳过: %s", filepath.name)
             return None
 
     def mark_current_invalid(self):
@@ -80,7 +80,7 @@ class CookieManager:
             self._files = [f for f in self._files if f.exists()]
 
     async def validate_all(self):
-        """启动时验证 cookie 有效性, 过期/损坏的自动删除"""
+        """启动时验证 cookie, 过期/损坏自动删除, 打印摘要"""
         self._scan()
         if not self._files:
             return
@@ -94,7 +94,7 @@ class CookieManager:
                 with open(filepath, "r", encoding="utf-8") as f:
                     storage = json.load(f)
             except (json.JSONDecodeError, ValueError):
-                logger.warning("Cookie 损坏, 已删除: %s", filepath.name)
+                logger.warning("Cookie 损坏(非JSON), 已删除: %s", filepath.name)
                 filepath.unlink()
                 continue
 
@@ -105,7 +105,8 @@ class CookieManager:
                 if c.get("name") in ("SESSDATA", "bili_jct", "DedeUserID")
             )
             if not cookie_str:
-                valid.append(filepath)
+                logger.warning("Cookie 内容不完整, 已删除: %s", filepath.name)
+                filepath.unlink()
                 continue
 
             try:
@@ -127,6 +128,8 @@ class CookieManager:
         removed = total - len(valid)
         if removed:
             logger.info("已清理 %d 个无效 Cookie", removed)
+        if not valid:
+            logger.warning("所有 Cookie 均已无效! 请运行 save_cookie.py 重新获取")
 
 
 # 全局单例
