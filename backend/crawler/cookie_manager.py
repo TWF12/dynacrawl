@@ -93,12 +93,18 @@ class CookieManager:
 
         import urllib.request
 
+        total = len(self._files)
         valid = []
         for filepath in self._files:
             try:
                 with open(filepath, "r", encoding="utf-8") as f:
                     storage = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                logger.warning("Cookie 文件损坏(非JSON), 删除: %s", filepath.name)
+                filepath.unlink()
+                continue
 
+            try:
                 # 提取 cookies 发 HTTP 请求验证
                 cookies = storage.get("cookies", [])
                 cookie_str = "; ".join(
@@ -125,12 +131,13 @@ class CookieManager:
                     logger.warning("Cookie 已过期, 删除: %s", filepath.name)
                     filepath.unlink()
             except Exception as e:
-                logger.warning("Cookie 验证失败 %s: %s, 暂时保留", filepath.name, e)
-                valid.append(filepath)  # 网络错误不删除, 保留
+                logger.warning("Cookie 网络验证失败 %s: %s, 暂时保留", filepath.name, e)
+                valid.append(filepath)
 
         self._files = valid
+        removed = total - len(valid)
         if valid:
-            logger.info("Cookie 验证完成: %d/%d 有效", len(valid), len(self._files) + (len(self._files) != len(valid)))
+            logger.info("Cookie 验证完成: %d 有效, %d 删除", len(valid), removed)
         else:
             logger.warning("所有 Cookie 均已过期或无效!")
 
