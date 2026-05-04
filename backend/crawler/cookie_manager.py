@@ -32,9 +32,7 @@ class CookieManager:
         COOKIE_DIR.mkdir(parents=True, exist_ok=True)
         self._files = sorted(COOKIE_DIR.glob("*.json"))
 
-        if self._files:
-            logger.info("Cookie: %d 个文件", len(self._files))
-        else:
+        if not self._files:
             logger.warning("未找到任何 Cookie 文件, 将无登录态运行")
 
     @property
@@ -136,9 +134,9 @@ class CookieManager:
 
         self._files = valid
         removed = total - len(valid)
-        if valid:
-            logger.info("Cookie 验证完成: %d 有效, %d 删除", len(valid), removed)
-        else:
+        if removed:
+            logger.info("已删除 %d 个损坏/过期 Cookie", removed)
+        if not valid:
             logger.warning("所有 Cookie 均已过期或无效!")
 
 
