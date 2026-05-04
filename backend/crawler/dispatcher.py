@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 from backend.config import REDIS_URL, QUEUE_KEY
+from backend.crawler.anti_detect import mark_task_cancelled, is_task_cancelled
 from backend.crawler.url_processor import process_url_message, ProgressCallback
 
 logger = logging.getLogger(__name__)
@@ -109,9 +110,8 @@ class CrawlDispatcher:
 
     async def cancel_task(self, task_id: str):
         """取消任务: 全局标记 + 清理队列中待处理的 URL"""
-        global _cancelled_tasks
         self._cancelled_tasks.add(task_id)
-        _cancelled_tasks.add(task_id)
+        mark_task_cancelled(task_id)
         removed = await self.queue.remove_task(task_id)
         logger.info(f"任务 {task_id} 已取消, 队列中移除 {removed} 个 URL")
 
@@ -119,7 +119,7 @@ class CrawlDispatcher:
         label = f"消费者 {consumer_id} "
 
         async def enqueue(task_id: str, msg: dict):
-            if task_id not in self._cancelled_tasks:
+            if not is_task_cancelled(task_id):
                 await self.queue.push(task_id, msg)
 
         while self._running:
@@ -128,9 +128,8 @@ class CrawlDispatcher:
                 continue
 
             task_id = msg.get("task_id", "")
-            if task_id in self._cancelled_tasks:
+            if is_task_cancelled(task_id):
                 logger.info("%s跳过已取消任务 %s 的 URL", label, task_id)
-                self._cancelled_tasks.discard(task_id)  # 清理标记
                 continue
 
             async with self.db_session_factory() as session:
@@ -143,11 +142,6 @@ class CrawlDispatcher:
 
 
 _dispatcher: Optional[CrawlDispatcher] = None
-_cancelled_tasks: set[str] = set()
-
-
-def is_task_cancelled(task_id: str) -> bool:
-    return task_id in _cancelled_tasks
 
 
 def get_dispatcher() -> Optional[CrawlDispatcher]:

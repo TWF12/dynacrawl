@@ -268,6 +268,18 @@ async def setup_page(page: Page):
     })
 
 
+# 任务取消标记 (供 dispatcher 设置, scraper 检查, 避免循环导入)
+_cancelled_tasks: set[str] = set()
+
+
+def mark_task_cancelled(task_id: str):
+    _cancelled_tasks.add(task_id)
+
+
+def is_task_cancelled(task_id: str) -> bool:
+    return task_id in _cancelled_tasks
+
+
 async def random_delay():
     delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
     await asyncio.sleep(delay)

@@ -6,10 +6,9 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay
+from backend.crawler.anti_detect import random_delay, is_task_cancelled
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
-from backend.crawler.dispatcher import is_task_cancelled
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
