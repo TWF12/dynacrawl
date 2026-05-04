@@ -11,6 +11,13 @@ from backend.crawler.scraper_video import scrape_video_info, scrape_video_commen
 
 logger = logging.getLogger(__name__)
 
+
+def _fmt_error(e: Exception) -> str:
+    """从异常中提取首行关键信息，截断到 200 字符"""
+    first_line = str(e).split("\n")[0].strip()
+    return first_line[:200] if len(first_line) > 200 else first_line
+
+
 ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
 EnqueueCallback = Callable[[str, dict], Awaitable[None]]
 
@@ -201,13 +208,13 @@ async def process_url_message(
                 if retry_count < MAX_RETRY:
                     url_record.retry_count = retry_count + 1
                     url_record.status = "pending"
-                    url_record.error_msg = str(e)[:500]
+                    url_record.error_msg = _fmt_error(e)
                     msg["retry_count"] = retry_count + 1
                     if enqueue_callback:
                         await enqueue_callback(task_id, msg)
                 else:
                     url_record.status = "failed"
-                    url_record.error_msg = f"超过最大重试次数: {str(e)[:500]}"
+                    url_record.error_msg = f"重试{MAX_RETRY}次仍失败: {_fmt_error(e)}"
 
             task = await session.get(Task, task_id)
             if task:

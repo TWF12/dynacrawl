@@ -253,11 +253,11 @@ async def scrape_up_videos(
                     videos.append(v)
                 total_count = dom_total or await _get_video_count_from_page(page1, uid)
                 if total_count:
-                    errors.append(f"DOM 提取 {len(videos)} 条, 总数 {total_count}")
+                    errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
                 elif len(videos) > 0:
-                    errors.append(f"DOM 提取 {len(videos)} 条")
+                    errors.append(f"DOM提取 {len(videos)} 条")
                 else:
-                    errors.append("arc/search接口失败, DOM也未提取到视频")
+                    errors.append("API+DOM均未提取到视频")
                 return {"videos": videos, "total_count": total_count, "errors": errors,
                         "status": _pick_status(errors, len(videos) > 0)}
 
@@ -327,7 +327,7 @@ async def scrape_up_videos(
                 logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
 
             if total_count and len(videos) < total_count:
-                errors.append(f"视频列表不完整: 获取 {len(videos)}/{total_count}")
+                errors.append(f"视频不全: {len(videos)}/{total_count}")
 
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
