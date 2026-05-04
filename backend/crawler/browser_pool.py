@@ -66,7 +66,8 @@ class BrowserPool:
             self._headful_browser = await self._headful_playwright.chromium.launch(
                 headless=False,
                 args=["--disable-blink-features=AutomationControlled",
-                       "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
+                       "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox",
+                       "--start-minimized", "--window-position=-32000,-32000"],
             )
 
     @asynccontextmanager
