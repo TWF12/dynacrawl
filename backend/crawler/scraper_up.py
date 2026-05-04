@@ -9,6 +9,7 @@ from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
+from backend.crawler.dispatcher import is_task_cancelled
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ async def scrape_up_videos(
     max_pages: int = 0,
     progress_callback: Optional[VideoProgressCallback] = None,
     on_page_done: Optional[PageDoneCallback] = None,
+    task_id: str = "",
 ) -> dict:
     """爬取 UP 主的视频列表，自动 session 轮换防风控"""
     videos: list[dict] = []
@@ -326,6 +328,11 @@ async def scrape_up_videos(
     session_init_failures = 0  # 连续 _init_session 失败计数
 
     while current_pn <= total_pages:
+        if task_id and is_task_cancelled(task_id):
+            logger.info("任务 %s 已取消, 停止采集 (已采集 %d 页)", task_id, current_pn - 1)
+            errors.append("任务已取消")
+            break
+
         async with browser_pool.acquire_headful_context() as ctx:
             # 新 session: 重新加载投稿页获取 mixin_key
             mixin_key = await _init_session(ctx, uid)
@@ -343,6 +350,11 @@ async def scrape_up_videos(
             consecutive_failures = 0
 
             while session_pages < max_session_pages and current_pn <= total_pages:
+                # 任务取消检查
+                if task_id and is_task_cancelled(task_id):
+                    logger.info("任务 %s 已取消, 停止采集", task_id)
+                    break
+
                 # 渐进延迟
                 delay = _progressive_delay(current_pn, total_pages)
                 await asyncio.sleep(delay)

@@ -108,8 +108,10 @@ class CrawlDispatcher:
         logger.info(f"任务 {task_id} 已提交 {len(urls)} 个 URL")
 
     async def cancel_task(self, task_id: str):
-        """取消任务: 标记 + 清理队列中待处理的 URL"""
+        """取消任务: 全局标记 + 清理队列中待处理的 URL"""
+        global _cancelled_tasks
         self._cancelled_tasks.add(task_id)
+        _cancelled_tasks.add(task_id)
         removed = await self.queue.remove_task(task_id)
         logger.info(f"任务 {task_id} 已取消, 队列中移除 {removed} 个 URL")
 
@@ -141,6 +143,11 @@ class CrawlDispatcher:
 
 
 _dispatcher: Optional[CrawlDispatcher] = None
+_cancelled_tasks: set[str] = set()
+
+
+def is_task_cancelled(task_id: str) -> bool:
+    return task_id in _cancelled_tasks
 
 
 def get_dispatcher() -> Optional[CrawlDispatcher]:

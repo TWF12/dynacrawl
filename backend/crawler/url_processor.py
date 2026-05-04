@@ -100,6 +100,7 @@ async def process_url_message(
                     page, msg.get("uid", ""),
                     progress_callback=_video_progress,
                     on_page_done=_save_page,
+                    task_id=task_id,
                 )
                 videos = result.get("videos", [])
                 api_total = result.get("total_count", 0)
