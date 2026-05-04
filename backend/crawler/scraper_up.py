@@ -27,6 +27,10 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
         await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         await random_delay()
 
+        await page.set_extra_http_headers({
+            "Referer": "https://www.bilibili.com/",
+            "Origin": "https://www.bilibili.com",
+        })
         card_url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
         response = await page.goto(card_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if response and response.ok:
@@ -43,9 +47,9 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                     result["video_count"] = ac
                     return result
             else:
-                errors.append("card接口异常")
+                errors.append("card异常")
         else:
-            errors.append("card接口请求失败")
+            errors.append("card失败")
 
         # 2. card API 没拿到 → arc/search?ps=1
         mixin_key = await get_mixin_key(page)
@@ -54,6 +58,10 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 "mid": uid, "ps": "1", "pn": "1",
                 "tid": "0", "keyword": "", "order": "pubdate",
             }, mixin_key)
+            await page.set_extra_http_headers({
+                "Referer": f"https://space.bilibili.com/{uid}",
+                "Origin": "https://space.bilibili.com",
+            })
             api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
             resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             if resp and resp.ok:
@@ -65,31 +73,32 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                         result["video_count"] = total
                         return result
                 else:
-                    errors.append("arc/search接口异常")
+                    errors.append("arc/search异常")
             else:
-                errors.append("arc/search接口请求失败")
+                errors.append("arc/search失败")
         else:
-            errors.append("WBI密钥获取失败")
+            errors.append("WBI密钥失败")
 
         # 3. API 都失败 → 加载 /upload/video 从 sidebar DOM 提取
+        # 用 domcontentloaded 而非 networkidle, B站页面持续网络请求永不 idle
         try:
             upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-            resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             if resp and resp.ok:
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
                 dom_count = await _get_video_count_from_page(page, uid)
                 if dom_count:
                     result["video_count"] = dom_count
                 else:
-                    errors.append("sidebar未找到视频数")
+                    errors.append("sidebar无数据")
             else:
-                errors.append("投稿页加载失败")
+                errors.append("投稿页失败")
         except Exception:
-            errors.append("投稿页加载超时")
+            errors.append("投稿页超时")
 
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
-        errors.append("请求超时")
+        errors.append("超时")
 
     if errors:
         result["errors"] = errors
@@ -167,7 +176,7 @@ async def _dom_fallback(uid: str, seen_bvids: set, page1,
 
     for attempt_url in urls_to_try:
         try:
-            await page1.goto(attempt_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            await page1.goto(attempt_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             await page1.wait_for_timeout(3000)
 
             total_count = await _get_video_count_from_page(page1, uid) or total_count
@@ -230,16 +239,16 @@ async def scrape_up_videos(
         try:
             # 第 1 页：加载投稿页，尝试 arc/search
             upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-            resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+            resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             if not resp or not resp.ok:
-                errors.append("投稿页加载失败")
+                errors.append("投稿页失败")
                 return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
             await page1.wait_for_timeout(3000)
 
             # 获取 mixin_key
             mixin_key = await get_mixin_key(page1)
             if not mixin_key:
-                errors.append("WBI密钥获取失败")
+                errors.append("WBI密钥失败")
                 logger.error("无法获取 WBI mixin_key uid=%s", uid)
                 return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
 
@@ -348,7 +357,7 @@ async def scrape_up_videos(
 
         except Exception as exc:
             logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
-            errors.append("请求超时")
+            errors.append("超时")
         finally:
             if page1 is not None:
                 await page1.close()

@@ -115,7 +115,7 @@
                             <tr v-for="r in taskDetail.url_records" :key="r.id">
                                 <td>{{ r.url_type }}</td><td class="url-cell">{{ r.url }}</td>
                                 <td><span class="tag" :class="statusTagClass(r.status)">{{ statusLabel(r.status) }}</span></td>
-                                <td class="ellipsis" style="max-width:200px">{{ r.error_msg||'-' }}</td>
+                                <td class="ellipsis" style="max-width:300px">{{ r.error_msg||'-' }}</td>
                                 <td>{{ r.retry_count }}</td>
                             </tr>
                         </tbody>

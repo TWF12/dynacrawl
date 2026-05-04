@@ -154,7 +154,8 @@ async def process_url_message(
                 scrape_errors = result.get("errors", [])
                 scraper_status = result.get("status", "completed")
             if scrape_errors:
-                url_record.error_msg = "; ".join(scrape_errors)
+                msg = "; ".join(scrape_errors)
+                url_record.error_msg = msg[:120] + "..." if len(msg) > 120 else msg
             # status 映射: ok→completed, fallback→partial, failed→failed
             url_record.status = {"ok": "completed", "fallback": "partial", "failed": "failed"}.get(
                 scraper_status, "completed")
