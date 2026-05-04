@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from backend.schemas import TaskCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
+from backend.routers.ws import get_cached_progress
 from backend.services import task_service
 from backend.crawler.dispatcher import get_dispatcher
 from backend.crawler.error_codes import ERROR_MESSAGES
@@ -58,4 +59,5 @@ async def get_task_results(task_id: str):
         up_infos=[UpInfoResponse.model_validate(u) for u in results["up_infos"]] if results["up_infos"] else None,
         video_infos=[VideoInfoResponse.model_validate(v) for v in results["video_infos"]] if results["video_infos"] else None,
         comments=[CommentResponse.model_validate(c) for c in results["comments"]] if results["comments"] else None,
+        progress_message=get_cached_progress(task_id),
     )

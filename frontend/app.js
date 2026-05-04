@@ -52,7 +52,6 @@ const app = createApp({
 
         async function viewTask(task) {
             selectedTask.value = task;
-            // 立即用已有数据显示进度，避免闪现 0%
             wsProgress.percent = task.total_urls > 0 ? Math.round(task.completed_urls / task.total_urls * 100) : 0;
             wsProgress.message = "";
             Object.assign(taskDetail, { task: null, url_records: [], up_infos: [], video_infos: [], comments: [] });
@@ -60,8 +59,19 @@ const app = createApp({
                 const res = await axios.get("/api/tasks/" + task.id + "/results");
                 Object.assign(taskDetail, res.data);
                 wsProgress.percent = res.data.task.total_urls > 0 ? Math.round(res.data.task.completed_urls / res.data.task.total_urls * 100) : 0;
+                wsProgress.message = res.data.progress_message || "";
             } catch (e) { console.error(e); }
             connectWebSocket(task.id);
+        }
+
+        async function loadTaskDetail(taskId) {
+            try {
+                const res = await axios.get("/api/tasks/" + taskId + "/results");
+                Object.assign(taskDetail, res.data);
+                if (res.data.progress_message) {
+                    wsProgress.message = res.data.progress_message;
+                }
+            } catch (e) { console.error(e); }
         }
 
         function connectWebSocket(taskId) {
@@ -89,13 +99,6 @@ const app = createApp({
                 if (wsConnection && wsConnection.readyState === WebSocket.OPEN) wsConnection.send("ping");
             }, 30000);
             wsConnection.onclose = function () { if (wsHeartbeat) { clearInterval(wsHeartbeat); wsHeartbeat = null; } };
-        }
-
-        async function loadTaskDetail(taskId) {
-            try {
-                const res = await axios.get("/api/tasks/" + taskId + "/results");
-                Object.assign(taskDetail, res.data);
-            } catch (e) { console.error(e); }
         }
 
         function closeDetail() {

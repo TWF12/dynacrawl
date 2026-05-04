@@ -37,8 +37,16 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# 缓存每个任务最新的进度消息, API 查询时可立即返回
+_progress_cache: dict[str, str] = {}
+
+
+def get_cached_progress(task_id: str) -> str:
+    return _progress_cache.get(task_id, "")
+
 
 async def progress_callback(task_id: str, completed: int, total: int, failed: int, message: str):
+    _progress_cache[task_id] = message
     msg = TaskProgressMessage(
         type="progress", task_id=task_id, completed_urls=completed,
         total_urls=total, failed_urls=failed, message=message,
