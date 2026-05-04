@@ -102,34 +102,47 @@ async def get_task_results(task_id: str) -> dict:
 async def recover_pending_tasks(dispatcher=None) -> int:
     async with async_session() as session:
         result = await session.execute(
-            select(Task).where(Task.status.in_([TaskStatus.PENDING.value, TaskStatus.RUNNING.value])))
+            select(Task).where(Task.status.in_([
+                TaskStatus.PENDING.value, TaskStatus.RUNNING.value, TaskStatus.FAILED.value])))
         tasks = result.scalars().all()
         recovered = 0
         for task in tasks:
+            # 查找待恢复的 URL：pending/processing + failed（浏览器崩溃等临时失败）
             url_result = await session.execute(
                 select(UrlRecord).where(UrlRecord.task_id == task.id,
-                                         UrlRecord.status.in_(["pending", "processing"])))
+                                         UrlRecord.status.in_(["pending", "processing", "failed"])))
             urls = url_result.scalars().all()
             if not urls:
+                # 无待恢复URL，统计完成状态
                 completed = (await session.execute(
                     select(func.count()).select_from(UrlRecord).where(
                         UrlRecord.task_id == task.id, UrlRecord.status == "completed"))).scalar() or 0
+                partial = (await session.execute(
+                    select(func.count()).select_from(UrlRecord).where(
+                        UrlRecord.task_id == task.id, UrlRecord.status == "partial"))).scalar() or 0
                 failed = (await session.execute(
                     select(func.count()).select_from(UrlRecord).where(
                         UrlRecord.task_id == task.id, UrlRecord.status == "failed"))).scalar() or 0
-                task.completed_urls = completed
+                task.completed_urls = completed + partial + failed
                 task.failed_urls = failed
-                task.status = TaskStatus.COMPLETED.value if failed == 0 else TaskStatus.FAILED.value
+                if failed > 0:
+                    task.status = TaskStatus.FAILED.value
+                elif partial > 0:
+                    task.status = "partial"
+                else:
+                    task.status = TaskStatus.COMPLETED.value
                 task.updated_at = datetime.now()
                 continue
 
             urls_to_queue = []
             for url in urls:
                 url.status = "pending"
+                url.retry_count = 0
+                url.error_msg = None
                 url.updated_at = datetime.now()
                 extra = {"uid": task.input_value} if url.url_type in ("up_api", "up_video_list") else {"bv_id": task.input_value}
                 urls_to_queue.append({"url_id": url.id, "url": url.url, "url_type": url.url_type,
-                                       "retry_count": url.retry_count, **extra})
+                                       "retry_count": 0, **extra})
 
             task.status = TaskStatus.RUNNING.value
             task.updated_at = datetime.now()
