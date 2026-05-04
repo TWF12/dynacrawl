@@ -6,13 +6,12 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, rotate_proxy_if_needed
+from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
 
-FETCH_CONCURRENCY = 1
 # 进度回调: (current, total, message)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
@@ -212,6 +211,36 @@ async def _dom_fallback(uid: str, seen_bvids: set, page1,
 
 PageDoneCallback = Callable[[list[dict], int], Awaitable[None]]
 
+# 单 session 最大翻页数 (随机范围)
+_SESSION_PAGE_MIN = 25
+_SESSION_PAGE_MAX = 40
+
+
+def _progressive_delay(pn: int, total_pages: int) -> float:
+    """渐进延迟: 越往后请求越慢, 避免风控"""
+    if pn <= 20:
+        return random.uniform(5, 12)
+    elif pn <= 50:
+        return random.uniform(10, 25)
+    elif pn <= 100:
+        return random.uniform(18, 40)
+    else:
+        return random.uniform(30, 60)
+
+
+async def _init_session(ctx, uid: str) -> str | None:
+    """为新 session 加载投稿页并获取 mixin_key, 返回 key 或 None"""
+    pg = await ctx.new_page()
+    try:
+        upload_url = f"https://space.bilibili.com/{uid}/upload/video"
+        resp = await pg.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        if not resp or not resp.ok:
+            return None
+        await pg.wait_for_timeout(3000)
+        return await get_mixin_key(pg)
+    finally:
+        await pg.close()
+
 
 async def scrape_up_videos(
     page: Page,
@@ -220,11 +249,11 @@ async def scrape_up_videos(
     progress_callback: Optional[VideoProgressCallback] = None,
     on_page_done: Optional[PageDoneCallback] = None,
 ) -> dict:
-    """爬取 UP 主的视频列表，每页完成后通过 on_page_done 实时回传数据"""
-    videos = []
+    """爬取 UP 主的视频列表，自动 session 轮换防风控"""
+    videos: list[dict] = []
     errors: list[str] = []
     total_count = 0
-    seen_bvids: set = set()
+    seen_bvids: set[str] = set()
     await random_delay()
 
     async def _save_page(page_videos: list[dict]):
@@ -234,133 +263,128 @@ async def scrape_up_videos(
             except Exception as exc:
                 logger.warning("实时回传失败: %s", exc)
 
-    async with browser_pool.acquire_headful_context() as context:
-        page1 = await context.new_page()
-        try:
-            # 第 1 页：加载投稿页，尝试 arc/search
-            upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-            resp = await page1.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            if not resp or not resp.ok:
-                errors.append("投稿页失败")
-                return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
-            await page1.wait_for_timeout(3000)
+    # ================================================================
+    # Phase 1: 第 1 页 — 获取 total_count 和首页视频
+    # ================================================================
+    async with browser_pool.acquire_headful_context() as ctx:
+        mixin_key = await _init_session(ctx, uid)
+        if not mixin_key:
+            errors.append("WBI密钥失败")
+            return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
 
-            # 获取 mixin_key
-            mixin_key = await get_mixin_key(page1)
+        pg1 = await ctx.new_page()
+        try:
+            page1_data, _ = await _fetch_arc_page(pg1, uid, 1, mixin_key)
+        finally:
+            await pg1.close()
+
+        if page1_data is None:
+            # arc/search 失败 → DOM 兜底
+            logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
+            pg_dom = await ctx.new_page()
+            try:
+                dom_videos, dom_total = await _dom_fallback(
+                    uid, seen_bvids, pg_dom, progress_callback)
+            finally:
+                await pg_dom.close()
+            for v in dom_videos:
+                videos.append(v)
+            total_count = dom_total or 0
+            if total_count:
+                errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
+            elif len(videos) > 0:
+                errors.append(f"DOM提取 {len(videos)} 条")
+            else:
+                errors.append("API+DOM均未提取到视频")
+            return {"videos": videos, "total_count": total_count, "errors": errors,
+                    "status": _pick_status(errors, len(videos) > 0)}
+
+        total_count = _process_arc_data(page1_data, videos, seen_bvids)
+        ps = page1_data.get("page", {}).get("ps", 50)
+        total_pages = (total_count + ps - 1) // ps if total_count else 0
+        if max_pages and max_pages < total_pages:
+            total_pages = max_pages
+
+        logger.info("第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
+                    len(videos), uid, total_count, total_pages)
+        await _save_page(videos[:])
+        if progress_callback:
+            await progress_callback(1, total_pages,
+                                    f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
+
+    if total_pages <= 1:
+        return {"videos": videos, "total_count": total_count, "errors": errors,
+                "status": _pick_status(errors, len(videos) > 0)}
+
+    # ================================================================
+    # Phase 2: 第 2 页起 — session 轮换 + 渐进延迟
+    # ================================================================
+    current_pn = 2
+    session_pages = 0
+    max_session_pages = random.randint(_SESSION_PAGE_MIN, _SESSION_PAGE_MAX)
+    page_errors = 0
+    consecutive_failures = 0
+
+    while current_pn <= total_pages:
+        async with browser_pool.acquire_headful_context() as ctx:
+            # 新 session: 重新加载投稿页获取 mixin_key
+            mixin_key = await _init_session(ctx, uid)
             if not mixin_key:
                 errors.append("WBI密钥失败")
-                logger.error("无法获取 WBI mixin_key uid=%s", uid)
-                return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
+                break
 
-            # 首页数据：先尝试 arc/search API，失败则 DOM 兜底
-            page1_data = await _fetch_arc_page(page1, uid, 1, mixin_key)
-            if not page1_data:
-                # arc/search 失败 → 多页面 DOM 兜底
-                logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
-                dom_videos, dom_total = await _dom_fallback(
-                    uid, seen_bvids, page1, progress_callback)
-                for v in dom_videos:
-                    videos.append(v)
-                total_count = dom_total or await _get_video_count_from_page(page1, uid)
-                if total_count:
-                    errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
-                elif len(videos) > 0:
-                    errors.append(f"DOM提取 {len(videos)} 条")
-                else:
-                    errors.append("API+DOM均未提取到视频")
-                return {"videos": videos, "total_count": total_count, "errors": errors,
-                        "status": _pick_status(errors, len(videos) > 0)}
+            session_pages = 0
+            consecutive_failures = 0
 
-            total_count = _process_arc_data(page1_data, videos, seen_bvids)
-            ps = page1_data.get("page", {}).get("ps", 50)
-            total_pages = (total_count + ps - 1) // ps if total_count else 0
-            if max_pages and max_pages < total_pages:
-                total_pages = max_pages
+            while session_pages < max_session_pages and current_pn <= total_pages:
+                # 渐进延迟
+                delay = _progressive_delay(current_pn, total_pages)
+                await asyncio.sleep(delay)
 
-            logger.info("第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
-                        len(videos), uid, total_count, total_pages)
-
-            await _save_page(videos[:])
-
-            if progress_callback:
-                await progress_callback(1, total_pages,
-                                        f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
-
-            await page1.close()
-            page1 = None
-
-            # 第 2 页起：并发请求
-            if total_pages <= 1:
-                return {"videos": videos, "total_count": total_count, "errors": errors,
-                        "status": _pick_status(errors, len(videos) > 0)}
-
-            sem = asyncio.Semaphore(FETCH_CONCURRENCY)
-            completed_pages = 1
-            page_errors = 0
-
-            # 代理轮换间隔: 至少 3 页, 最多总页数 1/3, 由页数动态决定随机范围
-            def _next_rotate_interval() -> int:
-                upper = max(4, (total_pages - completed_pages) // 3 + 1)
-                return random.randint(3, min(15, upper))
-
-            _rotate_after = completed_pages + _next_rotate_interval()
-
-            async def _fetch_one_page(pn: int):
-                await random_delay()
-                async with sem:
-                    nonlocal _rotate_after
-                    if completed_pages >= _rotate_after:
-                        new_node = await rotate_proxy_if_needed()
-                        if new_node:
-                            logger.info("第 %d 页后切换节点: %s", completed_pages, new_node)
-                            _rotate_after = completed_pages + _next_rotate_interval()
-                            await asyncio.sleep(random.uniform(2, 4))
-                        else:
-                            logger.warning("第 %d 页后节点切换未成功，跳过本次轮换", completed_pages)
-                    pg = await context.new_page()
-                    try:
-                        data = await _fetch_arc_page(pg, uid, pn, mixin_key)
-                        return (pn, data)
-                    finally:
-                        await pg.close()
-
-            remaining = list(range(2, total_pages + 1))
-            tasks = [_fetch_one_page(pn) for pn in remaining]
-
-            for coro in asyncio.as_completed(tasks):
+                pg = await ctx.new_page()
                 try:
-                    pn, data = await coro
-                    if data:
-                        before = len(videos)
-                        _process_arc_data(data, videos, seen_bvids)
-                        new_vids = videos[before:]
-                        if new_vids:
-                            await _save_page(new_vids)
-                    else:
-                        page_errors += 1
-                except Exception as exc:
-                    page_errors += 1
-                    logger.warning("翻页失败 pn: %s", exc)
+                    data, ratelimited = await _fetch_arc_page(pg, uid, current_pn, mixin_key)
+                finally:
+                    await pg.close()
 
-                completed_pages += 1
+                if data is not None:
+                    before = len(videos)
+                    _process_arc_data(data, videos, seen_bvids)
+                    new_vids = videos[before:]
+                    if new_vids:
+                        await _save_page(new_vids)
+                    current_pn += 1
+                    session_pages += 1
+                    consecutive_failures = 0
+                elif ratelimited:
+                    logger.warning("第 %d 页风控, 切换 session (当前 session 已请求 %d 页)",
+                                   current_pn, session_pages)
+                    break  # 退出内层循环 → 关闭 context → 下次迭代创建新 session
+                else:
+                    page_errors += 1
+                    consecutive_failures += 1
+                    current_pn += 1
+                    if consecutive_failures >= 3:
+                        logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
+                        break
+
                 if progress_callback:
                     await progress_callback(
-                        completed_pages, total_pages,
-                        f"第 {completed_pages}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
+                        current_pn - 1, total_pages,
+                        f"第 {current_pn - 1}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
                     )
 
-            if page_errors:
-                logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
+            # 主动轮换: session 到达页数上限
+            if session_pages >= max_session_pages and current_pn <= total_pages:
+                logger.info("Session 已请求 %d 页, 主动轮换 (下一页: %d/%d)",
+                            session_pages, current_pn, total_pages)
+                max_session_pages = random.randint(_SESSION_PAGE_MIN, _SESSION_PAGE_MAX)
 
-            if total_count and len(videos) < total_count:
-                errors.append(f"视频不全: {len(videos)}/{total_count}")
+    if page_errors:
+        logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
 
-        except Exception as exc:
-            logger.error(f"爬取视频列表失败 uid={uid}: {exc}")
-            errors.append("超时")
-        finally:
-            if page1 is not None:
-                await page1.close()
+    if total_count and len(videos) < total_count:
+        errors.append(f"视频不全: {len(videos)}/{total_count}")
 
     return {"videos": videos, "total_count": total_count, "errors": errors,
             "status": _pick_status(errors, len(videos) > 0)}
@@ -370,8 +394,9 @@ async def scrape_up_videos(
 # 工具函数
 # ============================================================
 
-async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:
-    """用 page.goto 调 arc/search API（含完整浏览器伪装头 + Referer）"""
+async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tuple[Optional[dict], bool]:
+    """调 arc/search API, 返回 (data, hit_ratelimit).
+    hit_ratelimit=True 表示遇到 -352/-412 需要切换 session"""
     params = sign_params({
         "mid": uid, "ps": "50", "pn": str(pn),
         "tid": "0", "keyword": "", "order": "pubdate",
@@ -380,7 +405,6 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
     referer = f"https://space.bilibili.com/{uid}/upload/video"
 
     async def _do_fetch():
-        # context 已设浏览器伪装头, page 级别只需加 Referer 和 Origin（与 context 合并）
         await page.set_extra_http_headers({
             "Referer": referer,
             "Origin": "https://space.bilibili.com",
@@ -396,27 +420,27 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict
         data = await _do_fetch()
         if not data:
             logger.warning("arc/search pn=%d HTTP请求失败", pn)
-            return None
+            return None, False
 
         code = data.get("code")
         if code == 0 and isinstance(data.get("data"), dict):
-            return data["data"]
+            return data["data"], False
 
         logger.warning("arc/search pn=%d code=%d msg=%s",
                        pn, code, data.get("message", ""))
-        # -352: 风控拦截, -412: 请求被 ban — 等待后重试一次
         if code in (-352, -412):
-            logger.error("风控触发! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
+            logger.error("风控! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
             await asyncio.sleep(random.uniform(30, 60))
             data = await _do_fetch()
             if data and data.get("code") == 0 and isinstance(data.get("data"), dict):
                 logger.info("风控重试成功 pn=%d", pn)
-                return data["data"]
-            logger.error("风控重试仍失败 pn=%d code=%s", pn,
-                        data.get("code") if data else "HTTP_FAIL")
+                return data["data"], False
+            logger.error("风控重试仍失败 pn=%d, 需切换session", pn)
+            return None, True
+        return None, False
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
-    return None
+        return None, False
 
 
 def _process_arc_data(data: dict, videos: list[dict], seen_bvids: set) -> int:
