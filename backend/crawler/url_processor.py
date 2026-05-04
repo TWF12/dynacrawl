@@ -6,6 +6,7 @@ from sqlalchemy import select, func
 
 from backend.config import MAX_RETRY
 from backend.models import UrlRecord, Task, UpInfo, VideoInfo, Comment
+from backend.schemas import TaskStatus
 from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
 
@@ -40,6 +41,12 @@ async def process_url_message(
     if not task:
         logger.info("任务 %s 已删除, 跳过 URL %s", task_id, url_id)
         return
+
+    # 首次被 consumer 拾取, 切为运行中
+    if task.status == TaskStatus.PENDING.value:
+        task.status = TaskStatus.RUNNING.value
+        task.updated_at = datetime.now()
+        await session.commit()
 
     try:
         url_record = await session.get(UrlRecord, url_id)

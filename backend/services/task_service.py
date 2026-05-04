@@ -53,7 +53,7 @@ async def create_task(scene: str, input_value: str, dispatcher=None) -> Task:
                                    "url_type": url_record2.url_type, "bv_id": bv_id, "retry_count": 0})
 
         task.total_urls = len(urls_to_queue)
-        task.status = TaskStatus.RUNNING.value
+        # 状态保持 PENDING, consumer 真正开始处理时才切 RUNNING
         await session.commit()
 
         if dispatcher:
@@ -178,7 +178,8 @@ async def recover_pending_tasks(dispatcher=None) -> int:
                     UrlRecord.task_id == task.id, UrlRecord.status == "failed"))).scalar() or 0
             task.completed_urls = new_completed + new_partial + new_failed
             task.failed_urls = new_failed
-            task.status = TaskStatus.RUNNING.value
+            # 状态保持 PENDING, consumer 真正开始处理时才切 RUNNING
+            task.status = TaskStatus.PENDING.value
             task.updated_at = datetime.now()
             recovered += 1
             await session.commit()

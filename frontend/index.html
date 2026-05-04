@@ -91,6 +91,9 @@
                     </div>
                 </div>
                 <div class="panel-body">
+                    <div class="live-progress live-waiting" v-if="selectedTask.status==='pending'">
+                        <div class="live-msg">排队等待中, 消费者空闲后自动开始...</div>
+                    </div>
                     <div class="live-progress" v-if="selectedTask.status==='running'||selectedTask.status==='processing'">
                         <div class="progress-bar progress-bar-lg"><div class="progress-fill running" :style="{width:wsProgress.percent+'%'}">{{ wsProgress.percent }}%</div></div>
                         <div class="live-msg">{{ wsProgress.message }}</div>
