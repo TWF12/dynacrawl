@@ -213,20 +213,24 @@ async def _dom_fallback(uid: str, seen_bvids: set, page1,
 PageDoneCallback = Callable[[list[dict], int], Awaitable[None]]
 
 # 单 session 最大翻页数 (随机范围)
-_SESSION_PAGE_MIN = 25
-_SESSION_PAGE_MAX = 40
+def _session_page_limit(total_pages: int) -> int:
+    """按总页数自适应: 大UP多轮换(~20%), 小UP不轮换"""
+    if total_pages <= 20:
+        return total_pages + 1  # 一口气跑完, 不轮换
+    return max(15, min(40, total_pages // 5))
 
 
 def _progressive_delay(pn: int, total_pages: int) -> float:
-    """渐进延迟: 越往后请求越慢, 避免风控"""
-    if pn <= 20:
-        return random.uniform(5, 12)
-    elif pn <= 50:
-        return random.uniform(10, 25)
-    elif pn <= 100:
-        return random.uniform(18, 40)
+    """渐进延迟: 按进度比例缩放, 小UP快大UP慢, 兼顾效率与风控"""
+    ratio = pn / max(total_pages, 20)
+    if ratio <= 0.15:
+        return random.uniform(3, 8)
+    elif ratio <= 0.4:
+        return random.uniform(8, 20)
+    elif ratio <= 0.7:
+        return random.uniform(15, 35)
     else:
-        return random.uniform(30, 60)
+        return random.uniform(25, 50)
 
 
 async def _init_session(ctx, uid: str) -> str | None:
@@ -322,7 +326,7 @@ async def scrape_up_videos(
     # Phase 2: 第 2 页起 — session 轮换 + 渐进延迟
     # ================================================================
     current_pn = 2
-    max_session_pages = random.randint(_SESSION_PAGE_MIN, _SESSION_PAGE_MAX)
+    max_session_pages = _session_page_limit(total_pages)
     page_errors = 0
     session_init_failures = 0  # 连续 _init_session 失败计数
 
@@ -414,7 +418,7 @@ async def scrape_up_videos(
             if session_pages >= max_session_pages and current_pn <= total_pages:
                 logger.info("Session 已请求 %d 页, 主动轮换 (下一页: %d/%d)",
                             session_pages, current_pn, total_pages)
-                max_session_pages = random.randint(_SESSION_PAGE_MIN, _SESSION_PAGE_MAX)
+                max_session_pages = _session_page_limit(total_pages - current_pn + 1)
 
     if page_errors:
         logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
