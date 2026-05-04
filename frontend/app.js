@@ -126,13 +126,13 @@ const app = createApp({
                 const hasRunning = tasks.value.some(t => t.status === "pending" || t.status === "running" || t.status === "processing");
                 if (hasRunning) {
                     await loadTasks();
-                    // 如果正在查看详情且任务已完成，刷新详情
+                    // 正在查看详情时实时刷新视频条数和状态
                     if (selectedTask.value) {
                         const updated = tasks.value.find(t => t.id === selectedTask.value.id);
                         if (updated) {
-                            selectedTask.value = updated;  // 同步状态变化
+                            selectedTask.value = updated;
+                            await loadTaskDetail(selectedTask.value.id);
                             if (updated.status === "completed" || updated.status === "failed" || updated.status === "partial") {
-                                await loadTaskDetail(selectedTask.value.id);
                                 if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
                                     wsConnection.close();
                                 }
