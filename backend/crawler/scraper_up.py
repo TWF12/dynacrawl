@@ -362,26 +362,49 @@ async def scrape_up_videos(
 # ============================================================
 
 async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> dict | None:
-    """用 page.goto 调 arc/search API（设 Referer 头）"""
+    """用 page.goto 调 arc/search API（含完整浏览器伪装头 + Referer）"""
     params = sign_params({
         "mid": uid, "ps": "50", "pn": str(pn),
         "tid": "0", "keyword": "", "order": "pubdate",
     }, mixin_key)
     api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
+    referer = f"https://space.bilibili.com/{uid}/upload/video"
 
-    try:
+    async def _do_fetch():
+        # context 已设浏览器伪装头, page 级别只需加 Referer 和 Origin（与 context 合并）
         await page.set_extra_http_headers({
-            "Referer": f"https://space.bilibili.com/{uid}/upload/video",
+            "Referer": referer,
+            "Origin": "https://space.bilibili.com",
         })
         resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if resp and resp.ok:
             text = await page.evaluate("() => document.body.innerText")
             data = json.loads(text)
-            if data.get("code") == 0 and isinstance(data.get("data"), dict):
+            return data
+        return None
+
+    try:
+        data = await _do_fetch()
+        if not data:
+            logger.warning("arc/search pn=%d HTTP请求失败", pn)
+            return None
+
+        code = data.get("code")
+        if code == 0 and isinstance(data.get("data"), dict):
+            return data["data"]
+
+        logger.warning("arc/search pn=%d code=%d msg=%s",
+                       pn, code, data.get("message", ""))
+        # -352: 风控拦截, -412: 请求被 ban — 等待后重试一次
+        if code in (-352, -412):
+            logger.error("风控触发! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
+            await asyncio.sleep(random.uniform(30, 60))
+            data = await _do_fetch()
+            if data and data.get("code") == 0 and isinstance(data.get("data"), dict):
+                logger.info("风控重试成功 pn=%d", pn)
                 return data["data"]
-            else:
-                logger.warning("arc/search pn=%d code=%d msg=%s",
-                               pn, data.get("code"), data.get("message", ""))
+            logger.error("风控重试仍失败 pn=%d code=%s", pn,
+                        data.get("code") if data else "HTTP_FAIL")
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
     return None

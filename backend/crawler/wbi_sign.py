@@ -16,7 +16,7 @@ MIXIN_KEY_ENC_TAB = [
 
 _cached_mixin_key: str = ""
 _cached_at: float = 0
-_cache_ttl: float = 3600
+_cache_ttl: float = 600  # B站 WBI 密钥约 10-20 分钟轮换, 10 分钟刷新保活
 
 NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 
