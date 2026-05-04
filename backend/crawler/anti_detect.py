@@ -112,7 +112,7 @@ CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090")
 CLASH_PROXY = os.environ.get("CLASH_PROXY", "http://127.0.0.1:7890")
 CLASH_GROUP = os.environ.get("CLASH_GROUP", "")
 _last_clash_node = None
-_clash_groups_cache = None
+_clash_lock = asyncio.Lock()
 
 
 def _safe_log(msg: str, *args):
@@ -123,15 +123,37 @@ def _safe_log(msg: str, *args):
         logger.info(msg.encode("ascii", errors="replace").decode(), *args)
 
 
-def _auto_detect_group() -> str | None:
+def _clash_get(path: str) -> dict:
+    import urllib.request
+    req = urllib.request.Request(f"{CLASH_CONTROLLER}{path}")
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.loads(resp.read())
+
+
+def _clash_put(path: str, body: dict) -> None:
+    import urllib.request
+    req = urllib.request.Request(
+        f"{CLASH_CONTROLLER}{path}",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PUT")
+    urllib.request.urlopen(req, timeout=5)
+
+
+def _clash_exit_ip() -> str:
+    import urllib.request
+    proxy_handler = urllib.request.ProxyHandler({"https": CLASH_PROXY})
+    opener = urllib.request.build_opener(proxy_handler)
+    ip_req = urllib.request.Request("https://api.ip.sb/ip", headers={"User-Agent": "curl/8.0"})
+    with opener.open(ip_req, timeout=5) as r:
+        return r.read().decode().strip()
+
+
+async def _auto_detect_group() -> str | None:
     """未指定 CLASH_GROUP 时自动检测第一个可用的选择组"""
-    global _clash_groups_cache
     SKIP_GROUPS = {"DIRECT", "REJECT", "GLOBAL"}
     try:
-        import urllib.request
-        req = urllib.request.Request(f"{CLASH_CONTROLLER}/proxies")
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
+        data = await asyncio.to_thread(_clash_get, "/proxies")
         proxies = data.get("proxies", {})
         for name, info in proxies.items():
             if info.get("type") in ("Selector", "URLTest", "Fallback"):
@@ -143,49 +165,40 @@ def _auto_detect_group() -> str | None:
     return None
 
 
-def _rotate_clash_proxy() -> str | None:
+async def _rotate_clash_proxy() -> str | None:
     """通过 Clash API 切换代理组节点，返回新节点名"""
     global _last_clash_node
-    try:
-        group = CLASH_GROUP or _auto_detect_group()
-        if not group:
-            return None
-
-        import urllib.request, urllib.parse
-        encoded_group = urllib.parse.quote(group, safe="")
-        url = f"{CLASH_CONTROLLER}/proxies/{encoded_group}"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-        all_nodes = data.get("all", [])
-        if len(all_nodes) <= 1:
-            return None
-        candidates = [n for n in all_nodes if n != _last_clash_node]
-        if not candidates:
-            candidates = all_nodes
-        chosen = random.choice(candidates)
-        switch_req = urllib.request.Request(
-            url, data=json.dumps({"name": chosen}).encode(),
-            headers={"Content-Type": "application/json"}, method="PUT")
-        urllib.request.urlopen(switch_req, timeout=5)
-        _last_clash_node = chosen
-
-        # 查出口 IP
-        exit_ip = ""
+    async with _clash_lock:
         try:
-            proxy_handler = urllib.request.ProxyHandler({"https": CLASH_PROXY})
-            opener = urllib.request.build_opener(proxy_handler)
-            ip_req = urllib.request.Request("https://api.ip.sb/ip",
-                                            headers={"User-Agent": "curl/8.0"})
-            with opener.open(ip_req, timeout=5) as r:
-                exit_ip = r.read().decode().strip()
-        except Exception:
+            group = CLASH_GROUP or await _auto_detect_group()
+            if not group:
+                return None
+
+            import urllib.parse
+            encoded_group = urllib.parse.quote(group, safe="")
+            path = f"/proxies/{encoded_group}"
+            data = await asyncio.to_thread(_clash_get, path)
+            all_nodes = data.get("all", [])
+            if len(all_nodes) <= 1:
+                return None
+            candidates = [n for n in all_nodes if n != _last_clash_node]
+            if not candidates:
+                candidates = all_nodes
+            chosen = random.choice(candidates)
+            old_node = _last_clash_node
+            await asyncio.to_thread(_clash_put, path, {"name": chosen})
+            _last_clash_node = chosen
+
             exit_ip = "?"
-        _safe_log("Clash 切换: %s -> %s  IP:%s", _last_clash_node or "初始", chosen, exit_ip)
-        return chosen
-    except Exception as e:
-        logger.debug("Clash 切换失败: %s", e)
-    return None
+            try:
+                exit_ip = await asyncio.to_thread(_clash_exit_ip)
+            except Exception:
+                pass
+            _safe_log("Clash 切换: %s -> %s  IP:%s", old_node or "初始", chosen, exit_ip)
+            return chosen
+        except Exception as e:
+            logger.debug("Clash 切换失败: %s", e)
+        return None
 
 
 def get_random_ua() -> str:
@@ -224,7 +237,7 @@ async def setup_page(page: Page):
 
 async def rotate_proxy_if_needed():
     """在创建新 context 前调用，自动轮换 Clash 节点"""
-    _rotate_clash_proxy()
+    await _rotate_clash_proxy()
 
 
 async def random_delay():

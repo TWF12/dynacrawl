@@ -99,6 +99,7 @@ class BrowserPool:
 
     async def _new_headful_context(self) -> BrowserContext:
         """创建已配置隐身 + cookie 的头有 context"""
+        await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
         storage = _load_storage_state()
@@ -144,6 +145,7 @@ class BrowserPool:
                 self._playwright = None
 
     async def _create_context(self) -> BrowserContext:
+        await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
         storage = _load_storage_state()
