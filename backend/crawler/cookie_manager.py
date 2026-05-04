@@ -32,9 +32,6 @@ class CookieManager:
         COOKIE_DIR.mkdir(parents=True, exist_ok=True)
         self._files = sorted(COOKIE_DIR.glob("*.json"))
 
-        if not self._files:
-            logger.warning("未找到任何 Cookie 文件, 将无登录态运行")
-
     @property
     def count(self) -> int:
         self._scan()
@@ -83,8 +80,7 @@ class CookieManager:
             self._files = [f for f in self._files if f.exists()]
 
     async def validate_all(self):
-        """启动时异步验证所有 cookie 有效性, 删除已过期的
-        通过实际请求 B站 nav API 检测登录态"""
+        """启动时验证 cookie 有效性, 过期/损坏的自动删除"""
         self._scan()
         if not self._files:
             return
@@ -98,23 +94,21 @@ class CookieManager:
                 with open(filepath, "r", encoding="utf-8") as f:
                     storage = json.load(f)
             except (json.JSONDecodeError, ValueError):
-                logger.warning("Cookie 文件损坏(非JSON), 删除: %s", filepath.name)
+                logger.warning("Cookie 损坏, 已删除: %s", filepath.name)
                 filepath.unlink()
                 continue
 
-            try:
-                # 提取 cookies 发 HTTP 请求验证
-                cookies = storage.get("cookies", [])
-                cookie_str = "; ".join(
-                    f"{c.get('name', '')}={c.get('value', '')}"
-                    for c in cookies
-                    if c.get("name") in ("SESSDATA", "bili_jct", "DedeUserID")
-                )
-                if not cookie_str:
-                    logger.warning("Cookie 文件缺少关键字段: %s", filepath.name)
-                    filepath.unlink()
-                    continue
+            cookies = storage.get("cookies", [])
+            cookie_str = "; ".join(
+                f"{c.get('name', '')}={c.get('value', '')}"
+                for c in cookies
+                if c.get("name") in ("SESSDATA", "bili_jct", "DedeUserID")
+            )
+            if not cookie_str:
+                valid.append(filepath)
+                continue
 
+            try:
                 req = urllib.request.Request(_NAV_URL, headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Cookie": cookie_str,
@@ -122,22 +116,17 @@ class CookieManager:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read())
                 if data.get("data", {}).get("isLogin"):
-                    uname = data["data"].get("uname", "?")
-                    logger.info("Cookie 有效: %s → %s", filepath.name, uname)
                     valid.append(filepath)
                 else:
-                    logger.warning("Cookie 已过期, 删除: %s", filepath.name)
+                    logger.warning("Cookie 已过期, 已删除: %s", filepath.name)
                     filepath.unlink()
-            except Exception as e:
-                logger.warning("Cookie 网络验证失败 %s: %s, 暂时保留", filepath.name, e)
+            except Exception:
                 valid.append(filepath)
 
         self._files = valid
         removed = total - len(valid)
         if removed:
-            logger.info("已删除 %d 个损坏/过期 Cookie", removed)
-        if not valid:
-            logger.warning("所有 Cookie 均已过期或无效!")
+            logger.info("已清理 %d 个无效 Cookie", removed)
 
 
 # 全局单例

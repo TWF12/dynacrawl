@@ -35,9 +35,9 @@ def _print_startup_warnings():
 
     # Cookie 检查 (验证前仅检查是否存在)
     if cookie_manager.count == 0:
-        warnings.append("未找到任何 B站 Cookie 文件")
-        warnings.append("  请运行: uv run python save_cookie.py  扫码登录保存 Cookie")
-        warnings.append("  无 Cookie 可能导致部分 API 限流或数据不完整")
+        warnings.append("未找到 B站 Cookie → 无法正常采集!")
+        warnings.append("  解决: uv run python save_cookie.py  扫码登录")
+        warnings.append("  无登录态: API 频次受限、部分 UP 主数据为空、风控阈值低")
 
     # 代理检查
     proxy_list_raw = os.environ.get("PROXY_LIST", "")
@@ -73,15 +73,10 @@ def _print_startup_warnings():
 async def lifespan(app: FastAPI):
     _print_startup_warnings()
 
-    logger.info("正在验证 Cookie 有效性...")
     await cookie_manager.validate_all()
     cookie_count = cookie_manager.count
-    if cookie_count == 0:
-        logger.warning("无有效 Cookie!")
-    elif cookie_count == 1:
-        logger.info("Cookie: 1 个 (多账号可运行 save_cookie.py 添加, 支持轮换)")
-    else:
-        logger.info("Cookie: %d 个 (轮换中)", cookie_count)
+    if cookie_count >= 2:
+        logger.info("Cookie: %d 个有效 (自动轮换)", cookie_count)
 
     logger.info("正在初始化数据库...")
     await init_db()
