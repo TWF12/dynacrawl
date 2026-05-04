@@ -205,10 +205,23 @@ def get_random_ua() -> str:
     return random.choice(USER_AGENTS)
 
 
+# 代理选择与轮换 — 支持 Clash API 和普通代理列表两种模式
+_current_proxy_index: int = -1
+
+
 def get_random_proxy() -> dict | None:
+    """返回当前轮换到的代理, 无 PROXY_LIST 则返回 None"""
+    global _current_proxy_index
     if not PROXY_LIST:
         return None
-    proxy_url = random.choice(PROXY_LIST).strip()
+    # 如果有上次轮换的索引就用它, 否则随机选一个
+    if _current_proxy_index < 0 or _current_proxy_index >= len(PROXY_LIST):
+        _current_proxy_index = random.randrange(len(PROXY_LIST))
+    return _parse_proxy_url(PROXY_LIST[_current_proxy_index])
+
+
+def _parse_proxy_url(raw: str) -> dict | None:
+    proxy_url = raw.strip()
     if not proxy_url:
         return None
     parsed = urlparse(proxy_url)
@@ -217,6 +230,26 @@ def get_random_proxy() -> dict | None:
         proxy["username"] = parsed.username
         proxy["password"] = parsed.password or ""
     return proxy
+
+
+async def rotate_proxy_if_needed() -> str | None:
+    """轮换出口 IP: 优先 Clash API 切换节点, 否则轮换 PROXY_LIST, 返回描述"""
+    # 方式 1: Clash API 轮换 (切换代理组内的上游节点)
+    clash_node = await _rotate_clash_proxy()
+    if clash_node:
+        return clash_node
+
+    # 方式 2: PROXY_LIST 多代理轮换 (直接在代理地址间切换)
+    global _current_proxy_index
+    if len(PROXY_LIST) > 1:
+        available = [i for i in range(len(PROXY_LIST)) if i != _current_proxy_index]
+        chosen = random.choice(available)
+        _current_proxy_index = chosen
+        label = PROXY_LIST[chosen].split("://")[-1].split("@")[-1].split("?")[0]
+        logger.info("代理切换: %s", label)
+        return label
+
+    return None
 
 
 async def apply_stealth(context: BrowserContext):
@@ -233,11 +266,6 @@ async def setup_page(page: Page):
         "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
         "Sec-Ch-UA-Platform": '"Windows"',
     })
-
-
-async def rotate_proxy_if_needed() -> str | None:
-    """在创建新 context 或翻页间隔时调用，自动轮换 Clash 节点，返回新节点名"""
-    return await _rotate_clash_proxy()
 
 
 async def random_delay():
