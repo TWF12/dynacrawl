@@ -80,7 +80,7 @@ async def process_url_message(
 
                 # 每页完成后立即存入数据库
                 async def _save_page(page_videos: list[dict], cumulative: int):
-                    # 任务可能已被删除, 跳过写入
+                    session.expire_all()
                     if not await session.get(Task, task_id):
                         return
                     for v in page_videos:
@@ -155,7 +155,8 @@ async def process_url_message(
                     ))
                 result = {"comment_count": len(comments)}
 
-        # 采集期间任务可能被删除(级联删除 URL 记录), 重新检查
+        # 采集期间任务可能被删除(级联删除 URL 记录), expire 后重新检查
+        session.expire_all()
         task_still_exists = await session.get(Task, task_id)
         if not task_still_exists:
             logger.info("任务 %s 在采集期间被删除, 跳过后续更新", task_id)
@@ -220,7 +221,7 @@ async def process_url_message(
     except Exception as e:
         logger.error(f"{consumer_label}处理 URL {url_id} 失败: {e}")
         await session.rollback()  # 先回滚损坏的事务
-        # 任务可能已被删除, 检查后再更新
+        session.expire_all()
         task_exists = await session.get(Task, task_id)
         if not task_exists:
             logger.info("任务 %s 已删除, 跳过错误处理", task_id)
