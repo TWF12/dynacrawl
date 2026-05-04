@@ -1,6 +1,4 @@
 import asyncio
-import json
-import os
 import sys
 import logging
 from typing import Optional
@@ -8,22 +6,11 @@ from contextlib import asynccontextmanager
 
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS, COOKIE_FILE
+from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
 from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed
+from backend.crawler.cookie_manager import cookie_manager
 
 logger = logging.getLogger(__name__)
-
-
-def _load_storage_state() -> dict | None:
-    """加载 B站 登录 cookie，文件不存在则返回 None"""
-    if not os.path.exists(COOKIE_FILE):
-        return None
-    try:
-        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning("加载 cookie 文件失败: %s", e)
-        return None
 
 
 class BrowserPool:
@@ -102,7 +89,7 @@ class BrowserPool:
         await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
-        storage = _load_storage_state()
+        storage = cookie_manager.get_next()
         context = await self._headful_browser.new_context(
             user_agent=ua,
             viewport={"width": 1920, "height": 1080},
@@ -155,7 +142,7 @@ class BrowserPool:
         await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
-        storage = _load_storage_state()
+        storage = cookie_manager.get_next()
         context = await self._browser.new_context(
             user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN",
             proxy=proxy,

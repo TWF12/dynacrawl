@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from backend.config import USE_REDIS, REDIS_URL, BASE_DIR, COOKIE_FILE, PROXY_LIST
+from backend.config import USE_REDIS, REDIS_URL, BASE_DIR, PROXY_LIST
+from backend.crawler.cookie_manager import cookie_manager
 from backend.database import init_db, async_session
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.dispatcher import CrawlDispatcher, MemoryQueue, RedisQueue, set_dispatcher
@@ -33,10 +34,13 @@ def _print_startup_warnings():
     warnings = []
 
     # Cookie 检查
-    if not os.path.exists(COOKIE_FILE):
-        warnings.append(f"未找到 B站 Cookie 文件 ({COOKIE_FILE})")
+    cookie_count = cookie_manager.count
+    if cookie_count == 0:
+        warnings.append("未找到任何 B站 Cookie 文件")
         warnings.append("  请运行: uv run python save_cookie.py  扫码登录保存 Cookie")
         warnings.append("  无 Cookie 可能导致部分 API 限流或数据不完整")
+    else:
+        logger.info("Cookie 已配置: %d 个文件 (支持轮换)", cookie_count)
 
     # 代理检查
     clash_ctrl = os.environ.get("CLASH_CONTROLLER", "")
@@ -69,6 +73,9 @@ def _print_startup_warnings():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _print_startup_warnings()
+
+    logger.info("正在验证 Cookie 有效性...")
+    await cookie_manager.validate_all()
 
     logger.info("正在初始化数据库...")
     await init_db()

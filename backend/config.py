@@ -26,4 +26,5 @@ if not _raw_proxy and os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090"
 PROXY_LIST = [p.strip() for p in _raw_proxy.split(",") if p.strip()]
 
 QUEUE_KEY = os.getenv("QUEUE_KEY", "dynacrawl:queue")
-COOKIE_FILE = str(DATA_DIR / "bilibili_cookies.json")
+COOKIE_DIR = DATA_DIR / "cookies"
+COOKIE_FILE = str(DATA_DIR / "bilibili_cookies.json")  # 单文件兼容（旧版）

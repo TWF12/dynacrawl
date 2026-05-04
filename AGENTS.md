@@ -44,8 +44,9 @@ backend/
 │   ├── task_service.py  # 任务生命周期、URL 生成、断点恢复（含旧数据清理）
 │   └── export_service.py# CSV/JSON 导出逻辑
 ├── crawler/
-│   ├── browser_pool.py  # 浏览器池（headless + headful 双模式，Semaphore 控并发）
-│   ├── anti_detect.py   # UA/视口/指纹隐身 + Clash代理轮换 + 普通代理列表轮换
+│   ├── browser_pool.py     # 浏览器池（headless + headful 双模式，Semaphore 控并发）
+│   ├── cookie_manager.py   # Cookie 管理器（多文件轮换 + 过期检测 + 自动删除）
+│   ├── anti_detect.py      # UA/视口/指纹隐身 + Clash代理轮换 + 普通代理列表轮换
 │   ├── scraper_up.py    # UP主数据爬取（API优先→DOM兜底，Session轮换+渐进延迟）
 │   ├── scraper_video.py # 视频数据爬取（API优先→页面降级）
 │   ├── wbi_sign.py      # B站 WBI 签名（img_key + sub_key 混排 → MD5 w_rid）
@@ -66,6 +67,7 @@ frontend/
 
 ### 浏览器管理
 
+- **Cookie 多账号轮换**：`CookieManager` 管理 `data/cookies/` 目录，启动时验证有效性，运行时遇 -101 自动删除切换
 - **双浏览器实例**：headless（视频详情用）+ headful（UP主采集用，绕过 B站 -352 检测）
 - headful 浏览器最小化并移到屏幕外（`--start-minimized`, `--window-position=-32000,-32000`）
 - Context 级别设置浏览器伪装头（Accept-Language/Accept/Sec-Ch-UA），所有新 page 自动继承

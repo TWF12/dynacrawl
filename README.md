@@ -34,10 +34,18 @@ B站 大部分 API 需要登录态才能正常访问。未登录时：
 ```bash
 uv run python save_cookie.py
 # → 弹出 Chromium 浏览器 → 点击右上角「登录」扫码
-# → 登录成功后回到终端按 Enter → Cookie 保存到 data/bilibili_cookies.json
+# → 登录成功后回到终端按 Enter → Cookie 保存到 data/cookies/cookie_1.json
 ```
 
-Cookie 文件有效期约 1-3 个月，过期后重新执行上述命令即可。
+**多账号轮换（可选）：**
+多次运行 `save_cookie.py` 用不同账号扫码，Cookie 会保存为 `cookie_1.json`、`cookie_2.json`...程序每次创建新浏览器会话时自动轮换到下一个有效 Cookie。同一账号重复扫码会自动更新已有文件。
+
+**过期自动处理：**
+- 启动时通过 B站 API 验证所有 Cookie 是否有效，过期自动删除
+- 采集过程中如检测到登录失效（B站返回 -101），自动删除当前 Cookie 并切换下一个
+- 所有 Cookie 过期时打印警告
+
+Cookie 文件有效期约 1-3 个月。
 
 ### 代理（强烈建议）
 

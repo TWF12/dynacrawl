@@ -8,6 +8,7 @@ from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
 from backend.crawler.browser_pool import browser_pool
+from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 
 logger = logging.getLogger(__name__)
@@ -428,6 +429,10 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
 
         logger.warning("arc/search pn=%d code=%d msg=%s",
                        pn, code, data.get("message", ""))
+        # 登录过期 → 删除当前 Cookie, 下次换下一个
+        if code in (-101, 3, -6):
+            logger.error("Cookie 已过期! code=%d pn=%d, 自动删除", code, pn)
+            cookie_manager.mark_current_invalid()
         if code in (-352, -412):
             logger.error("风控! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
             await asyncio.sleep(random.uniform(30, 60))
