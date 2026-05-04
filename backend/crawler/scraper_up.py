@@ -321,19 +321,24 @@ async def scrape_up_videos(
     # Phase 2: 第 2 页起 — session 轮换 + 渐进延迟
     # ================================================================
     current_pn = 2
-    session_pages = 0
     max_session_pages = random.randint(_SESSION_PAGE_MIN, _SESSION_PAGE_MAX)
     page_errors = 0
-    consecutive_failures = 0
+    session_init_failures = 0  # 连续 _init_session 失败计数
 
     while current_pn <= total_pages:
         async with browser_pool.acquire_headful_context() as ctx:
             # 新 session: 重新加载投稿页获取 mixin_key
             mixin_key = await _init_session(ctx, uid)
             if not mixin_key:
-                errors.append("WBI密钥失败")
-                break
+                session_init_failures += 1
+                if session_init_failures >= 3:
+                    errors.append("WBI密钥失败(重试3次)")
+                    break
+                logger.warning("_init_session 失败, 等待后重试 (%d/3)", session_init_failures)
+                await asyncio.sleep(random.uniform(10, 20))
+                continue  # 不 break, 让外层 while 创建新 context
 
+            session_init_failures = 0  # 成功后重置
             session_pages = 0
             consecutive_failures = 0
 
@@ -362,12 +367,31 @@ async def scrape_up_videos(
                                    current_pn, session_pages)
                     break  # 退出内层循环 → 关闭 context → 下次迭代创建新 session
                 else:
-                    page_errors += 1
-                    consecutive_failures += 1
-                    current_pn += 1
-                    if consecutive_failures >= 3:
-                        logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
-                        break
+                    # 非风控失败(网络/其他), 重试同一页一次
+                    logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
+                    await asyncio.sleep(random.uniform(5, 10))
+                    pg2 = await ctx.new_page()
+                    try:
+                        data2, _ = await _fetch_arc_page(pg2, uid, current_pn, mixin_key)
+                    finally:
+                        await pg2.close()
+                    if data2 is not None:
+                        before = len(videos)
+                        _process_arc_data(data2, videos, seen_bvids)
+                        new_vids = videos[before:]
+                        if new_vids:
+                            await _save_page(new_vids)
+                        current_pn += 1
+                        session_pages += 1
+                        consecutive_failures = 0
+                        logger.info("第 %d 页重试成功", current_pn - 1)
+                    else:
+                        page_errors += 1
+                        consecutive_failures += 1
+                        current_pn += 1
+                        if consecutive_failures >= 3:
+                            logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
+                            break
 
                 if progress_callback:
                     await progress_callback(
