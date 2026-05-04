@@ -77,13 +77,19 @@ async def get_task(task_id: str) -> Optional[Task]:
 
 
 async def delete_task(task_id: str) -> bool:
+    from backend.crawler.dispatcher import get_dispatcher
     async with async_session() as session:
         task = await session.get(Task, task_id)
         if not task:
             return False
         await session.delete(task)
         await session.commit()
-        return True
+
+    dispatcher = get_dispatcher()
+    if dispatcher:
+        await dispatcher.cancel_task(task_id)
+
+    return True
 
 
 async def get_task_results(task_id: str) -> dict:

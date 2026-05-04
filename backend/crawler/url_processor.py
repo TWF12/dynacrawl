@@ -35,6 +35,12 @@ async def process_url_message(
     url_type = msg["url_type"]
     retry_count = msg.get("retry_count", 0)
 
+    # 检查任务是否已被删除
+    task = await session.get(Task, task_id)
+    if not task:
+        logger.info("任务 %s 已删除, 跳过 URL %s", task_id, url_id)
+        return
+
     try:
         url_record = await session.get(UrlRecord, url_id)
         if url_record:

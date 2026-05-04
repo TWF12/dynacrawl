@@ -17,6 +17,8 @@ class QueueInterface(ABC):
     async def pop(self, timeout: float = 1.0) -> Optional[dict]: pass
     @abstractmethod
     async def length(self) -> int: pass
+    @abstractmethod
+    async def remove_task(self, task_id: str) -> int: pass
 
 
 class MemoryQueue(QueueInterface):
@@ -29,6 +31,21 @@ class MemoryQueue(QueueInterface):
         except asyncio.TimeoutError: return None
     async def length(self) -> int:
         return self._queue.qsize()
+    async def remove_task(self, task_id: str) -> int:
+        removed = 0
+        kept = []
+        while not self._queue.empty():
+            try:
+                item = self._queue.get_nowait()
+                if item.get("task_id") == task_id:
+                    removed += 1
+                else:
+                    kept.append(item)
+            except asyncio.QueueEmpty:
+                break
+        for item in kept:
+            await self._queue.put(item)
+        return removed
 
 
 class RedisQueue(QueueInterface):
@@ -54,6 +71,9 @@ class RedisQueue(QueueInterface):
     async def length(self) -> int:
         await self._ensure_redis()
         return await self._redis.llen(self.QUEUE_KEY)
+    async def remove_task(self, task_id: str) -> int:
+        # Redis 队列无法高效过滤单个任务, 由 consumer 侧跳过 + 过期 collection 清理
+        return 0
 
 
 class CrawlDispatcher:
@@ -65,6 +85,7 @@ class CrawlDispatcher:
         self.progress_callback = progress_callback
         self._running = False
         self._consumer_tasks: list[asyncio.Task] = []
+        self._cancelled_tasks: set[str] = set()
 
     async def start(self):
         self._running = True
@@ -86,15 +107,28 @@ class CrawlDispatcher:
             await self.queue.push(task_id, url_data)
         logger.info(f"任务 {task_id} 已提交 {len(urls)} 个 URL")
 
+    async def cancel_task(self, task_id: str):
+        """取消任务: 标记 + 清理队列中待处理的 URL"""
+        self._cancelled_tasks.add(task_id)
+        removed = await self.queue.remove_task(task_id)
+        logger.info(f"任务 {task_id} 已取消, 队列中移除 {removed} 个 URL")
+
     async def _consumer_loop(self, consumer_id: int):
         label = f"消费者 {consumer_id} "
 
         async def enqueue(task_id: str, msg: dict):
-            await self.queue.push(task_id, msg)
+            if task_id not in self._cancelled_tasks:
+                await self.queue.push(task_id, msg)
 
         while self._running:
             msg = await self.queue.pop(timeout=2.0)
             if msg is None:
+                continue
+
+            task_id = msg.get("task_id", "")
+            if task_id in self._cancelled_tasks:
+                logger.info("%s跳过已取消任务 %s 的 URL", label, task_id)
+                self._cancelled_tasks.discard(task_id)  # 清理标记
                 continue
 
             async with self.db_session_factory() as session:
