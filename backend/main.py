@@ -2,6 +2,7 @@
 动态爬虫数据采集平台 - FastAPI 主入口
 """
 import sys
+import os
 import asyncio
 
 if sys.platform == "win32":
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 
-from backend.config import USE_REDIS, REDIS_URL, BASE_DIR
+from backend.config import USE_REDIS, REDIS_URL, BASE_DIR, COOKIE_FILE, PROXY_LIST
 from backend.database import init_db, async_session
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.dispatcher import CrawlDispatcher, MemoryQueue, RedisQueue, set_dispatcher
@@ -27,8 +28,48 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger(__name__)
 
 
+def _print_startup_warnings():
+    """启动时检查关键配置, 缺失则打印警告"""
+    warnings = []
+
+    # Cookie 检查
+    if not os.path.exists(COOKIE_FILE):
+        warnings.append(f"未找到 B站 Cookie 文件 ({COOKIE_FILE})")
+        warnings.append("  请运行: uv run python save_cookie.py  扫码登录保存 Cookie")
+        warnings.append("  无 Cookie 可能导致部分 API 限流或数据不完整")
+
+    # 代理检查
+    clash_ctrl = os.environ.get("CLASH_CONTROLLER", "")
+    if PROXY_LIST:
+        logger.info("代理已配置: %d 个地址", len(PROXY_LIST))
+    elif clash_ctrl:
+        logger.info("Clash 代理模式: %s", clash_ctrl)
+    else:
+        warnings.append("未配置任何代理 (PROXY_LIST / CLASH_CONTROLLER)")
+        warnings.append("  直连采集极易触发 B站 风控, 强烈建议配置代理")
+
+    # Clash API 可达性 (仅当配置了 Clash 时检查)
+    if clash_ctrl and not PROXY_LIST:
+        try:
+            import urllib.request
+            urllib.request.urlopen(f"{clash_ctrl}/proxies", timeout=3)
+            logger.info("Clash API 可达: %s", clash_ctrl)
+        except Exception:
+            warnings.append(f"Clash API 不可达 ({clash_ctrl})")
+            warnings.append("  代理轮换将不可用, 请确认 Clash 已启动且 API 端口正确")
+
+    if warnings:
+        logger.warning("=" * 50)
+        logger.warning("!! 启动配置警告 !!")
+        for w in warnings:
+            logger.warning(w)
+        logger.warning("=" * 50)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _print_startup_warnings()
+
     logger.info("正在初始化数据库...")
     await init_db()
 
