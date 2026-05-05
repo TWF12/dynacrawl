@@ -443,7 +443,7 @@ async def scrape_up_videos(
     if page_errors:
         logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
 
-    if total_count and len(videos) < total_count:
+    if total_count and (existing_count + len(videos)) < total_count:
         errors.append(f"视频不全: {existing_count + len(videos)}/{total_count}")
 
     return {"videos": videos, "total_count": total_count, "errors": errors,
