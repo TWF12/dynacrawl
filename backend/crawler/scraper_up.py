@@ -258,6 +258,7 @@ async def scrape_up_videos(
     """爬取 UP 主的视频列表，自动 session 轮换防风控。existing_bvids 用于断点续爬"""
     if existing_bvids is None:
         existing_bvids = set()
+    existing_count = len(existing_bvids)
     videos: list[dict] = []
     errors: list[str] = []
     total_count = 0
@@ -327,7 +328,6 @@ async def scrape_up_videos(
     # ================================================================
     # Phase 2: 断点续爬 — 已有 BV 跳过, 从 last_page+1 开始
     # ================================================================
-    existing_count = len(existing_bvids)
     current_pn = max(2, (existing_count // 50) + 1)
     if current_pn > total_pages:
         logger.info("所有 %d 页已采集, 无需续爬", total_pages)
