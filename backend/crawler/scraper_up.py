@@ -314,10 +314,11 @@ async def scrape_up_videos(
         if max_pages and max_pages < total_pages:
             total_pages = max_pages
 
-        logger.info("第 1 页获取 %d 条 uid=%s (共 %d 条 %d 页)",
-                    len(videos), uid, total_count, total_pages)
+        logger.info("第 1 页获取 %d 条 uid=%s (已有 %d 共 %d 条 %d 页)",
+                    len(videos), uid, existing_count, total_count, total_pages)
         await _save_page(videos[:])
-        if progress_callback:
+        # 续爬时第1页只是验证, 没有新视频就不发进度, 避免闪现旧数量
+        if progress_callback and (existing_count == 0 or len(videos) > 0):
             await progress_callback(1, total_pages,
                                     f"第 1/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条")
 
