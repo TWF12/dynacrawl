@@ -150,7 +150,7 @@ frontend/
 - **B站页面用 domcontentloaded**：B站页面有持续广告/统计请求，`networkidle` 永远等不到导致超时。
 - **前端无构建**：Vue 3 + Element Plus 全部 CDN 引入，无需 npm/Node.js。
 - **多任务并发**：`up_video_list` 不占 `acquire_page` semaphore 槽（仅占 headful context 1 槽），3 任务可真正并发。任务提交后保持 PENDING，consumer 拾取时才切 RUNNING。
-- **错误隔离**：单个 URL 失败不影响同一任务的其他 URL，自动重试（最多 2 次）。
+- **自动延迟重试**：URL 失败后 5 级递增延迟自动重入队 (5s→30s→2min→10min→30min)，代理恢复后无需重启即可续采。
 - **Windows 编码**：日志输出做了 GBK 兼容处理（`_safe_log`）。
 
 ## 每次修改后必须同步
