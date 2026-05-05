@@ -234,14 +234,13 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
 
 
 async def _init_session(ctx, uid: str) -> str | None:
-    """为新 session 加载投稿页并获取 mixin_key, 返回 key 或 None"""
+    """为新 session 获取 mixin_key, 加载轻量首页替代投稿页"""
     pg = await ctx.new_page()
     try:
-        upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-        resp = await pg.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        resp = await pg.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if not resp or not resp.ok:
             return None
-        await pg.wait_for_timeout(3000)
+        await pg.wait_for_timeout(500)
         return await get_mixin_key(pg)
     finally:
         await pg.close()
@@ -352,67 +351,64 @@ async def scrape_up_videos(
             session_pages = 0
             consecutive_failures = 0
 
-            while session_pages < max_session_pages and current_pn <= total_pages:
-                # 任务取消检查
-                if task_id and is_task_cancelled(task_id):
-                    logger.info("任务 %s 已取消, 停止采集", task_id)
-                    break
+            # 复用单个页面发所有 API 请求, 消除每页 new_page/close 开销
+            api_page = await ctx.new_page()
+            try:
+                # 先导航到轻量首页建立 session origin
+                await api_page.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
 
-                # 渐进延迟
-                delay = _progressive_delay(current_pn, total_pages)
-                await asyncio.sleep(delay)
+                while session_pages < max_session_pages and current_pn <= total_pages:
+                    if task_id and is_task_cancelled(task_id):
+                        logger.info("任务 %s 已取消, 停止采集", task_id)
+                        break
 
-                pg = await ctx.new_page()
-                try:
-                    data, ratelimited = await _fetch_arc_page(pg, uid, current_pn, mixin_key)
-                finally:
-                    await pg.close()
+                    delay = _progressive_delay(current_pn, total_pages)
+                    await asyncio.sleep(delay)
 
-                if data is not None:
-                    before = len(videos)
-                    _process_arc_data(data, videos, seen_bvids)
-                    new_vids = videos[before:]
-                    if new_vids:
-                        await _save_page(new_vids)
-                    current_pn += 1
-                    session_pages += 1
-                    consecutive_failures = 0
-                elif ratelimited:
-                    logger.warning("第 %d 页风控, 切换 session (当前 session 已请求 %d 页)",
-                                   current_pn, session_pages)
-                    break  # 退出内层循环 → 关闭 context → 下次迭代创建新 session
-                else:
-                    # 非风控失败(网络/其他), 重试同一页一次
-                    logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
-                    await asyncio.sleep(random.uniform(5, 10))
-                    pg2 = await ctx.new_page()
-                    try:
-                        data2, _ = await _fetch_arc_page(pg2, uid, current_pn, mixin_key)
-                    finally:
-                        await pg2.close()
-                    if data2 is not None:
+                    data, ratelimited = await _fetch_arc_page(api_page, uid, current_pn, mixin_key)
+
+                    if data is not None:
                         before = len(videos)
-                        _process_arc_data(data2, videos, seen_bvids)
+                        _process_arc_data(data, videos, seen_bvids)
                         new_vids = videos[before:]
                         if new_vids:
                             await _save_page(new_vids)
                         current_pn += 1
                         session_pages += 1
                         consecutive_failures = 0
-                        logger.info("第 %d 页重试成功", current_pn - 1)
+                    elif ratelimited:
+                        logger.warning("第 %d 页风控, 切换 session (当前 session 已请求 %d 页)",
+                                       current_pn, session_pages)
+                        break
                     else:
-                        page_errors += 1
-                        consecutive_failures += 1
-                        current_pn += 1
-                        if consecutive_failures >= 3:
-                            logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
-                            break
+                        logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
+                        await asyncio.sleep(random.uniform(5, 10))
+                        data2, _ = await _fetch_arc_page(api_page, uid, current_pn, mixin_key)
+                        if data2 is not None:
+                            before = len(videos)
+                            _process_arc_data(data2, videos, seen_bvids)
+                            new_vids = videos[before:]
+                            if new_vids:
+                                await _save_page(new_vids)
+                            current_pn += 1
+                            session_pages += 1
+                            consecutive_failures = 0
+                            logger.info("第 %d 页重试成功", current_pn - 1)
+                        else:
+                            page_errors += 1
+                            consecutive_failures += 1
+                            current_pn += 1
+                            if consecutive_failures >= 3:
+                                logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
+                                break
 
-                if progress_callback:
-                    await progress_callback(
-                        current_pn - 1, total_pages,
-                        f"第 {current_pn - 1}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
-                    )
+                    if progress_callback:
+                        await progress_callback(
+                            current_pn - 1, total_pages,
+                            f"第 {current_pn - 1}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
+                        )
+            finally:
+                await api_page.close()
 
             # 主动轮换: session 到达页数上限
             if session_pages >= max_session_pages and current_pn <= total_pages:
