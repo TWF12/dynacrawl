@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from backend.schemas import TaskCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
-from backend.routers.ws import get_cached_progress
+from backend.routers.ws import get_cached_progress, get_cached_video_progress
 from backend.services import task_service
 from backend.crawler.dispatcher import get_dispatcher
 from backend.crawler.error_codes import ERROR_MESSAGES
@@ -53,6 +53,7 @@ async def get_task_results(task_id: str):
     results = await task_service.get_task_results(task_id)
     if not results.get("task"):
         raise HTTPException(status_code=404, detail="任务不存在")
+    vc, vt = get_cached_video_progress(task_id)
     return TaskResultResponse(
         task=TaskResponse.model_validate(results["task"]),
         url_records=[UrlRecordResponse.model_validate(r) for r in results["url_records"]],
@@ -60,4 +61,5 @@ async def get_task_results(task_id: str):
         video_infos=[VideoInfoResponse.model_validate(v) for v in results["video_infos"]] if results["video_infos"] else None,
         comments=[CommentResponse.model_validate(c) for c in results["comments"]] if results["comments"] else None,
         progress_message=get_cached_progress(task_id),
+        video_current=vc, video_total=vt,
     )

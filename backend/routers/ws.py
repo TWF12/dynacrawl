@@ -37,17 +37,24 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# 缓存每个任务最新的进度消息, API 查询时可立即返回
+# 缓存每个任务最新的进度, API 查询时可立即同步
 _progress_cache: dict[str, str] = {}
+_video_cache: dict[str, tuple[int, int]] = {}
 
 
 def get_cached_progress(task_id: str) -> str:
     return _progress_cache.get(task_id, "")
 
 
+def get_cached_video_progress(task_id: str) -> tuple[int, int]:
+    return _video_cache.get(task_id, (0, 0))
+
+
 async def progress_callback(task_id: str, completed: int, total: int, failed: int, message: str,
                               video_current: int = 0, video_total: int = 0):
     _progress_cache[task_id] = message
+    if video_total > 0:
+        _video_cache[task_id] = (video_current, video_total)
     msg = TaskProgressMessage(
         type="progress", task_id=task_id, completed_urls=completed,
         total_urls=total, failed_urls=failed, message=message,

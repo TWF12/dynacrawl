@@ -63,6 +63,9 @@ const app = createApp({
                 Object.assign(taskDetail, res.data);
                 wsProgress.percent = res.data.task.total_urls > 0 ? Math.round(res.data.task.completed_urls / res.data.task.total_urls * 100) : 0;
                 wsProgress.message = res.data.progress_message || "";
+                wsProgress.videoCurrent = res.data.video_current || 0;
+                wsProgress.videoTotal = res.data.video_total || 0;
+                wsProgress.videoPercent = res.data.video_total > 0 ? Math.round(res.data.video_current / res.data.video_total * 100) : 0;
             } catch (e) { console.error(e); }
             connectWebSocket(task.id);
         }
@@ -70,12 +73,14 @@ const app = createApp({
         async function loadTaskDetail(taskId) {
             try {
                 const res = await axios.get("/api/tasks/" + taskId + "/results");
-                // 只更新当前选中任务的数据, 防止旧 WS 回调覆盖新任务的 detail
                 if (!selectedTask.value || selectedTask.value.id !== taskId) return;
                 Object.assign(taskDetail, res.data);
                 const t = res.data.task;
                 wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
                 wsProgress.message = res.data.progress_message || "";
+                wsProgress.videoCurrent = res.data.video_current || 0;
+                wsProgress.videoTotal = res.data.video_total || 0;
+                wsProgress.videoPercent = res.data.video_total > 0 ? Math.round(res.data.video_current / res.data.video_total * 100) : 0;
             } catch (e) { console.error(e); }
         }
 

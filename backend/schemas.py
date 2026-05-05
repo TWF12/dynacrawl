@@ -90,6 +90,8 @@ class TaskResultResponse(BaseModel):
     video_infos: Optional[list[VideoInfoResponse]] = None
     comments: Optional[list[CommentResponse]] = None
     progress_message: str = ""
+    video_current: int = 0
+    video_total: int = 0
 
 
 class TaskProgressMessage(BaseModel):
