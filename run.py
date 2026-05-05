@@ -19,4 +19,5 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     reload = "--reload" in sys.argv
     print(f"启动 DynaCrawl 服务: http://{host}:{port}")
-    uvicorn.run("backend.main:app", host=host, port=port, reload=reload)
+    uvicorn.run("backend.main:app", host=host, port=port, reload=reload,
+                log_level="warning")
