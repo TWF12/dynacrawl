@@ -147,28 +147,23 @@ const app = createApp({
         function exportJSON(id) { window.open("/api/tasks/" + id + "/export/json", "_blank"); }
 
         let _taskListTimer = null;
-        // 任务列表自动刷新：当有运行中任务时每 3 秒刷新一次
         function _startAutoRefresh() {
             if (_taskListTimer) return;
             _taskListTimer = setInterval(async function () {
-                const hasRunning = tasks.value.some(t => t.status === "pending" || t.status === "running" || t.status === "processing");
-                if (hasRunning) {
-                    await loadTasks();
-                    // 正在查看详情时实时刷新视频条数和状态
-                    if (selectedTask.value) {
-                        const updated = tasks.value.find(t => t.id === selectedTask.value.id);
-                        if (updated) {
-                            selectedTask.value = updated;
-                            await loadTaskDetail(selectedTask.value.id);
-                            if (updated.status === "completed" || updated.status === "failed" || updated.status === "partial") {
-                                if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
-                                    wsConnection.close();
-                                }
+                await loadTasks();
+                if (selectedTask.value) {
+                    const updated = tasks.value.find(t => t.id === selectedTask.value.id);
+                    if (updated) {
+                        selectedTask.value = updated;
+                        await loadTaskDetail(selectedTask.value.id);
+                        if (updated.status === "completed" || updated.status === "failed" || updated.status === "partial") {
+                            if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+                                wsConnection.close();
                             }
                         }
                     }
                 }
-            }, 1500);
+            }, 2000);
         }
         onMounted(function () { loadTasks(); _startAutoRefresh(); });
         onUnmounted(function () { if (wsConnection) wsConnection.close(); if (_taskListTimer) clearInterval(_taskListTimer); });
