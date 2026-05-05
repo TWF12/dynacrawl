@@ -74,18 +74,27 @@ const app = createApp({
             } catch (e) { console.error(e); }
         }
 
+        let _wsTaskId = null, _wsReconnectTimer = null, _wsRetries = 0;
+
         function connectWebSocket(taskId) {
             if (wsConnection) { wsConnection.close(); wsConnection = null; }
             if (wsHeartbeat) { clearInterval(wsHeartbeat); wsHeartbeat = null; }
-            const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws/tasks/" + taskId;
+            if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+            _wsTaskId = taskId;
+            _wsRetries = 0;
+            _doConnect();
+        }
+
+        function _doConnect() {
+            if (!_wsTaskId) return;
+            const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws/tasks/" + _wsTaskId;
             wsConnection = new WebSocket(wsUrl);
             wsConnection.onmessage = function (event) {
+                _wsRetries = 0;
                 try {
                     const d = JSON.parse(event.data);
                     if (d.type === "pong") return;
                     if (d.type === "progress" || d.type === "complete") {
-                        console.log("WS:", d.completed_urls + "/" + d.total_urls, d.message);
-                        // 仅当有有效数字时更新进度条，否则保持原值（避免视频进度归零）
                         if (d.total_urls > 0) {
                             wsProgress.percent = Math.round(d.completed_urls / d.total_urls * 100);
                         }
@@ -95,10 +104,26 @@ const app = createApp({
                     }
                 } catch (e) { console.error("WS error:", e); }
             };
+            wsConnection.onopen = function () {
+                // 重连后立即同步最新状态
+                if (_wsTaskId) {
+                    loadTaskDetail(_wsTaskId);
+                    loadTasks();
+                }
+            };
             wsHeartbeat = setInterval(function () {
                 if (wsConnection && wsConnection.readyState === WebSocket.OPEN) wsConnection.send("ping");
             }, 30000);
-            wsConnection.onclose = function () { if (wsHeartbeat) { clearInterval(wsHeartbeat); wsHeartbeat = null; } };
+            wsConnection.onclose = function () {
+                if (wsHeartbeat) { clearInterval(wsHeartbeat); wsHeartbeat = null; }
+                wsConnection = null;
+                // 自动重连, 最多 10 次, 间隔递增
+                if (_wsTaskId && _wsRetries < 10) {
+                    var delay = Math.min(1000 * Math.pow(2, _wsRetries), 30000);
+                    _wsRetries++;
+                    _wsReconnectTimer = setTimeout(_doConnect, delay);
+                }
+            };
         }
 
         function closeDetail() {
