@@ -15,10 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 def _fmt_error(e: Exception) -> str:
-    """精简异常消息: 去冗长 URL + 限 100 字符"""
+    """精简异常消息: 去 URL/常见冗余, 限 80 字符"""
     msg = str(e).split("\n")[0].strip()
-    msg = re.sub(r'https?://\S+', '[URL]', msg)
-    return msg[:100] if len(msg) > 100 else msg
+    msg = re.sub(r'https?://\S+', '', msg)          # 去掉完整 URL
+    msg = re.sub(r'\s*at\s*$', '', msg)             # 去掉末尾 "at "
+    msg = re.sub(r'Page\.goto:\s*', '', msg)        # 去掉 "Page.goto: " 前缀
+    msg = re.sub(r'Call log:.*', '', msg)           # 去掉调用日志
+    msg = msg.strip()
+    return msg[:80] if len(msg) > 80 else msg
 
 
 ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
