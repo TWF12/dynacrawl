@@ -1,5 +1,6 @@
 import logging
 import re
+import asyncio as _asyncio
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
 
@@ -12,6 +13,12 @@ from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
 
 logger = logging.getLogger(__name__)
+
+
+async def _delayed_enqueue(enqueue_callback, task_id: str, msg: dict, delay: float):
+    """后台延迟重入队, 不阻塞 consumer 处理其他任务"""
+    await _asyncio.sleep(delay)
+    await enqueue_callback(task_id, msg)
 
 
 def _fmt_error(e: Exception) -> str:
@@ -263,16 +270,22 @@ async def process_url_message(
         try:
             url_record = await session.get(UrlRecord, url_id)
             if url_record:
-                if retry_count < MAX_RETRY:
-                    url_record.retry_count = retry_count + 1
+                new_retry = retry_count + 1
+                # 延迟重试: 前期快速, 后期递增等待, 给代理/网络恢复时间
+                _RETRY_DELAYS = [5, 30, 120, 600, 1800]  # 秒: 5s→30s→2min→10min→30min
+                max_auto_retry = len(_RETRY_DELAYS)
+                if new_retry <= max_auto_retry:
+                    url_record.retry_count = new_retry
                     url_record.status = "pending"
                     url_record.error_msg = _fmt_error(e)
-                    msg["retry_count"] = retry_count + 1
+                    msg["retry_count"] = new_retry
+                    delay = _RETRY_DELAYS[new_retry - 1]
+                    logger.info("URL %s 第 %d 次重试, %ds 后自动重入队", url_id, new_retry, delay)
                     if enqueue_callback:
-                        await enqueue_callback(task_id, msg)
+                        _asyncio.create_task(_delayed_enqueue(enqueue_callback, task_id, msg, delay))
                 else:
                     url_record.status = "failed"
-                    url_record.error_msg = f"重试{MAX_RETRY}次仍失败: {_fmt_error(e)}"
+                    url_record.error_msg = f"重试{max_auto_retry}次仍失败: {_fmt_error(e)}"
 
             task = await session.get(Task, task_id)
             if task:
