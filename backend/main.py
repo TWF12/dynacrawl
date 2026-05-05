@@ -133,6 +133,18 @@ app.include_router(ws.router)
 
 frontend_dir = BASE_DIR / "frontend"
 frontend_dir.mkdir(exist_ok=True)
+_no_cache_types = {".html", ".js", ".css"}
+
+@app.middleware("http")
+async def no_cache_static(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if any(path.endswith(ext) for ext in _no_cache_types):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
 
