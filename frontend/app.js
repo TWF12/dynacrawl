@@ -100,16 +100,15 @@ const app = createApp({
                     const d = JSON.parse(event.data);
                     if (d.type === "pong") return;
                     if (d.type === "progress" || d.type === "complete") {
-                        // 只更新当前选中任务的进度, 防止多任务互串
                         if (selectedTask.value && selectedTask.value.id === d.task_id) {
                             if (d.total_urls > 0) {
                                 wsProgress.percent = Math.round(d.completed_urls / d.total_urls * 100);
                             }
+                            wsProgress.message = d.message || "";
                             wsProgress.videoCurrent = d.video_current || 0;
                             wsProgress.videoTotal = d.video_total || 0;
                             wsProgress.videoPercent = d.video_total > 0 ? Math.round(d.video_current / d.video_total * 100) : 0;
                         }
-                        wsProgress.message = d.message || "";
                         loadTaskDetail(d.task_id);
                         loadTasks();
                     }
