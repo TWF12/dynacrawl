@@ -98,6 +98,7 @@ async def process_url_message(
                     await progress_callback(
                         task_id, 0, 0, 0,
                         f"视频采集: {message}",
+                        video_current=current, video_total=total,
                     )
 
             # 查询已有 BV 号用于断点续爬

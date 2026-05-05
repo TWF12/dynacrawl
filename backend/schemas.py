@@ -99,3 +99,5 @@ class TaskProgressMessage(BaseModel):
     total_urls: int = 0
     failed_urls: int = 0
     message: str = ""
+    video_current: int = 0
+    video_total: int = 0

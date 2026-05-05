@@ -95,7 +95,10 @@
                         <div class="live-msg">排队等待中, 消费者空闲后自动开始...</div>
                     </div>
                     <div class="live-progress" v-if="selectedTask.status==='running'||selectedTask.status==='processing'">
+                        <div class="progress-row-label">任务进度</div>
                         <div class="progress-bar progress-bar-lg"><div class="progress-fill running" :style="{width:wsProgress.percent+'%'}">{{ wsProgress.percent }}%</div></div>
+                        <div class="progress-row-label" v-if="wsProgress.videoTotal > 0">视频采集</div>
+                        <div class="progress-bar progress-bar-lg" v-if="wsProgress.videoTotal > 0"><div class="progress-fill running" :style="{width:wsProgress.videoPercent+'%'}">{{ wsProgress.videoCurrent }}/{{ wsProgress.videoTotal }} 页</div></div>
                         <div class="live-msg">{{ wsProgress.message }}</div>
                     </div>
                     <div class="live-progress live-partial" v-if="selectedTask.status==='partial'">
@@ -180,6 +183,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/app.js?v=7"></script>
+    <script src="/static/app.js?v=8"></script>
 </body>
 </html>

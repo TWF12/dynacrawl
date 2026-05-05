@@ -45,11 +45,13 @@ def get_cached_progress(task_id: str) -> str:
     return _progress_cache.get(task_id, "")
 
 
-async def progress_callback(task_id: str, completed: int, total: int, failed: int, message: str):
+async def progress_callback(task_id: str, completed: int, total: int, failed: int, message: str,
+                              video_current: int = 0, video_total: int = 0):
     _progress_cache[task_id] = message
     msg = TaskProgressMessage(
         type="progress", task_id=task_id, completed_urls=completed,
         total_urls=total, failed_urls=failed, message=message,
+        video_current=video_current, video_total=video_total,
     )
     await manager.broadcast(task_id, msg.model_dump())
 
