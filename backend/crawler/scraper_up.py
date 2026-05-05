@@ -343,6 +343,11 @@ async def scrape_up_videos(
         logger.info("断点续爬: 已有 %d 条, 从第 %d/%d 页开始",
                    existing_count, current_pn, total_pages)
 
+    # 立即同步初始进度到前端, 避免 Phase 2 首页完成前无反馈
+    if progress_callback:
+        await progress_callback(current_pn - 1, total_pages,
+                                f"第 {current_pn - 1}/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条")
+
     while current_pn <= total_pages:
         if task_id and is_task_cancelled(task_id):
             logger.info("任务 %s 已取消, 停止采集 (已采集 %d 页)", task_id, current_pn - 1)
