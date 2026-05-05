@@ -83,19 +83,22 @@ frontend/
 
 ### Session 轮换（核心防风控）
 
-- UP主视频采集每 25-40 页（随机）主动关闭旧 context、创建新 context
-- 新 context = 新 Cookie 上下文 + 新 Clash 节点/IP + 新 WBI 密钥
-- 遇 B站 -352/-412 风控：立即关闭当前 session，重建后重试同一页
-- 连续 3 页非风控失败也自动切换 session
+- 每次 `async with acquire_headful_context()` 创建新 context → 新 Cookie + 新 IP
+- 间隔按总页数自适应：`<=20` 页不轮换，`>20` 页每 `~20%` 主动轮换一次（15-40 页）
+- 遇 B站 -352/-412 风控：立即关闭当前 session，重建后重试**同一页**
+- 非风控失败（网络/超时）：等 5-10s 重试同一页，仍失败才计入错误；连续 3 页失败切 session
+- `_init_session` 失败不断开循环，等 10-20s 后重试新 context（最多 3 次）
 
 ### 渐进延迟
 
-| 页数范围 | 延迟 |
-|----------|------|
-| 1-20 | 5-12s |
-| 21-50 | 10-25s |
-| 51-100 | 18-40s |
-| 100+ | 30-60s |
+按进度比例 `pn / max(total_pages, 20)` 缩放，小 UP 全程快，大 UP 越往后越慢：
+
+| 进度 | 延迟 |
+|------|------|
+| 0-15% | 3-8s |
+| 15-40% | 8-20s |
+| 40-70% | 15-35s |
+| 70-100% | 25-50s |
 
 基础延迟（非翻页场景）：3-8s 随机
 
@@ -135,7 +138,7 @@ frontend/
 | `CLASH_CONTROLLER` | http://127.0.0.1:9090 | Clash REST API |
 | `CLASH_PROXY` | http://127.0.0.1:7890 | Clash 代理端口 |
 | `CLASH_GROUP` | (自动检测) | Clash 代理组名 |
-| `COOKIE_FILE` | data/bilibili_cookies.json | B站登录 Cookie |
+| `COOKIE_DIR` | data/cookies/ | Cookie 目录（多文件轮换） |
 | `USE_REDIS` | false | 启用 Redis 多 Worker |
 | `DATABASE_URL` | sqlite+aiosqlite:///data/dynacrawl.db | 数据库 |
 
@@ -145,6 +148,7 @@ frontend/
 - **代理强烈建议**：无代理启动会打印警告。大规模采集直连必然触发风控。
 - **B站页面用 domcontentloaded**：B站页面有持续广告/统计请求，`networkidle` 永远等不到导致超时。
 - **前端无构建**：Vue 3 + Element Plus 全部 CDN 引入，无需 npm/Node.js。
+- **多任务并发**：`up_video_list` 不占 `acquire_page` semaphore 槽（仅占 headful context 1 槽），3 任务可真正并发。任务提交后保持 PENDING，consumer 拾取时才切 RUNNING。
 - **错误隔离**：单个 URL 失败不影响同一任务的其他 URL，自动重试（最多 2 次）。
 - **Windows 编码**：日志输出做了 GBK 兼容处理（`_safe_log`）。
 
