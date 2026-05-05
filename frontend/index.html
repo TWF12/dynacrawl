@@ -36,6 +36,17 @@
                                 {{ submitting ? '提交中...' : '+ 提交采集任务' }}
                             </button>
                         </div>
+                        <div class="form-row" style="margin-top:16px; border-top:1px solid #ebeef5; padding-top:12px;">
+                            <label class="form-label">批量提交 (每行一个)</label>
+                            <textarea class="form-input" v-model="batchInput" rows="4"
+                                :placeholder="newTask.scene === 'up_info' ? '456664753\n8047632\n15773384' : 'BV1xx411c7mD\nBV1Qs4y1u7ZT'"
+                                style="height:80px; resize:vertical;"></textarea>
+                        </div>
+                        <div class="form-row">
+                            <button class="btn btn-primary" @click="submitBatch" :disabled="submitting || !batchInput.trim()">
+                                {{ submitting ? '提交中...' : '批量提交 (' + batchCount + '个)' }}
+                            </button>
+                        </div>
                         <div class="hint-box">
                             <template v-if="newTask.scene === 'up_info'">
                                 <b>UP主信息采集：</b><br>输入UP主UID，采集头像、粉丝数、视频BV号、播放量。

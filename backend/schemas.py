@@ -21,6 +21,11 @@ class TaskCreateRequest(BaseModel):
     input_value: str = Field(..., min_length=1, max_length=255)
 
 
+class BatchCreateRequest(BaseModel):
+    scene: SceneType
+    input_values: list[str] = Field(..., min_length=1, max_length=100)
+
+
 class TaskResponse(BaseModel):
     id: str
     scene: str

@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from backend.schemas import TaskCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
+from backend.schemas import TaskCreateRequest, BatchCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
 from backend.routers.ws import get_cached_progress, get_cached_video_progress
 from backend.services import task_service
 from backend.crawler.dispatcher import get_dispatcher
@@ -21,6 +21,21 @@ async def create_task(req: TaskCreateRequest):
         raise HTTPException(status_code=503, detail="调度器未就绪")
     task = await task_service.create_task(req.scene.value, req.input_value, dispatcher)
     return task
+
+
+@router.post("/batch", status_code=201)
+async def create_batch_tasks(req: BatchCreateRequest):
+    dispatcher = get_dispatcher()
+    if dispatcher is None:
+        raise HTTPException(status_code=503, detail="调度器未就绪")
+    created = []
+    for val in req.input_values:
+        val = val.strip()
+        if not val:
+            continue
+        task = await task_service.create_task(req.scene.value, val, dispatcher)
+        created.append(TaskResponse.model_validate(task))
+    return {"created": len(created), "tasks": [t.model_dump() for t in created]}
 
 
 @router.get("", response_model=dict)

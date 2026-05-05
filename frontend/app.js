@@ -1,13 +1,15 @@
-const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
 
 const app = createApp({
     setup() {
         const newTask = reactive({ scene: "up_info", input_value: "" });
+        const batchInput = ref("");
         const submitting = ref(false);
         const tasks = ref([]);
         const taskTotal = ref(0);
         const taskPage = ref(1);
         const taskPageSize = 10;
+        const batchCount = computed(() => batchInput.value.trim().split(/\n+/).filter(l => l.trim()).length);
 
         const selectedTask = ref(null);
         const taskDetail = reactive({ task: null, url_records: [], up_infos: [], video_infos: [], comments: [] });
@@ -46,6 +48,21 @@ const app = createApp({
                 viewTask(res.data);
             } catch (e) {
                 ElementPlus.ElMessage.error("创建任务失败: " + (e.response?.data?.detail || e.message));
+            }
+            submitting.value = false;
+        }
+
+        async function submitBatch() {
+            const lines = batchInput.value.trim().split(/\n+/).map(l => l.trim()).filter(Boolean);
+            if (!lines.length) { ElementPlus.ElMessage.warning("请输入至少一个UID或BV号"); return; }
+            submitting.value = true;
+            try {
+                const res = await axios.post("/api/tasks/batch", { scene: newTask.scene, input_values: lines });
+                ElementPlus.ElMessage.success("已创建 " + res.data.created + " 个任务");
+                batchInput.value = "";
+                await loadTasks();
+            } catch (e) {
+                ElementPlus.ElMessage.error("批量创建失败: " + (e.response?.data?.detail || e.message));
             }
             submitting.value = false;
         }
@@ -190,8 +207,8 @@ const app = createApp({
         });
         onUnmounted(function () { if (wsConnection) wsConnection.close(); if (_taskListTimer) clearInterval(_taskListTimer); });
 
-        return { newTask, submitting, tasks, taskTotal, taskPage, taskPageSize, selectedTask, taskDetail, wsProgress,
-            statusTagClass, statusLabel, loadTasks, submitTask, viewTask, closeDetail, deleteTask, exportCSV, exportJSON };
+        return { newTask, batchInput, batchCount, submitting, tasks, taskTotal, taskPage, taskPageSize, selectedTask, taskDetail, wsProgress,
+            statusTagClass, statusLabel, loadTasks, submitTask, submitBatch, viewTask, closeDetail, deleteTask, exportCSV, exportJSON };
     },
 });
 
