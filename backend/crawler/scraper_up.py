@@ -318,7 +318,7 @@ async def scrape_up_videos(
         await _save_page(videos[:])
         if progress_callback:
             await progress_callback(1, total_pages,
-                                    f"第 1/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条")
+                                    f"第 1/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条")
 
     if total_pages <= 1:
         return {"videos": videos, "total_count": total_count, "errors": errors,
@@ -423,7 +423,7 @@ async def scrape_up_videos(
                     if progress_callback:
                         await progress_callback(
                             current_pn - 1, total_pages,
-                            f"第 {current_pn - 1}/{total_pages} 页, 已获取 {len(videos)}/{total_count} 条"
+                            f"第 {current_pn - 1}/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条"
                         )
             finally:
                 await api_page.close()
@@ -438,7 +438,7 @@ async def scrape_up_videos(
         logger.warning("翻页失败数: %d uid=%s", page_errors, uid)
 
     if total_count and len(videos) < total_count:
-        errors.append(f"视频不全: {len(videos)}/{total_count}")
+        errors.append(f"视频不全: {existing_count + len(videos)}/{total_count}")
 
     return {"videos": videos, "total_count": total_count, "errors": errors,
             "status": _pick_status(errors, len(videos) > 0)}
