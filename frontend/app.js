@@ -68,9 +68,10 @@ const app = createApp({
             try {
                 const res = await axios.get("/api/tasks/" + taskId + "/results");
                 Object.assign(taskDetail, res.data);
-                if (res.data.progress_message) {
-                    wsProgress.message = res.data.progress_message;
-                }
+                // 同步进度条百分比和消息
+                const t = res.data.task;
+                wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
+                wsProgress.message = res.data.progress_message || "";
             } catch (e) { console.error(e); }
         }
 
