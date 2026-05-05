@@ -82,6 +82,7 @@ class BrowserPool:
                 yield context
             finally:
                 self._headful_contexts.remove(context)
+                cookie_manager.unregister_context(context)
                 await context.close()
 
     async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
@@ -90,7 +91,7 @@ class BrowserPool:
             await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
-        storage = cookie_manager.get_next()
+        storage, filepath = await cookie_manager.get_next()
         context = await self._headful_browser.new_context(
             user_agent=ua,
             viewport={"width": 1920, "height": 1080},
@@ -98,6 +99,7 @@ class BrowserPool:
             proxy=proxy,
             storage_state=storage,
         )
+        cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
         # context 级别浏览器伪装头, 所有新 page 自动继承
         await context.set_extra_http_headers({
@@ -125,11 +127,11 @@ class BrowserPool:
                 self._headful_playwright = None
 
             for ctx in self._contexts:
-                try: await ctx.close()
+                try: cookie_manager.unregister_context(ctx); await ctx.close()
                 except Exception: pass
             self._contexts.clear()
             for ctx in self._headful_contexts:
-                try: await ctx.close()
+                try: cookie_manager.unregister_context(ctx); await ctx.close()
                 except Exception: pass
             self._headful_contexts.clear()
             if self._browser:
@@ -143,12 +145,13 @@ class BrowserPool:
         await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
-        storage = cookie_manager.get_next()
+        storage, filepath = await cookie_manager.get_next()
         context = await self._browser.new_context(
             user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN",
             proxy=proxy,
             storage_state=storage,
         )
+        cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
         await context.set_extra_http_headers({
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",

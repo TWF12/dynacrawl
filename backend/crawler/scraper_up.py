@@ -380,14 +380,30 @@ async def scrape_up_videos(
             alt_pages: list = []
             extra_cookies = cookie_manager.count - 1  # 主 context 已用 1 个
             for i in range(extra_cookies):
+                actx = None
+                apg = None
                 try:
                     actx = await browser_pool._new_headful_context(rotate=False)
                     apg = await actx.new_page()
-                    await apg.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
+                    # 新 context 首次导航较慢, 给 20s
+                    await apg.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
                     alt_ctxs.append(actx)
                     alt_pages.append(apg)
-                except Exception:
-                    logger.warning("第%d个备用 context 创建失败, 跳过", i + 2)
+                except Exception as e:
+                    logger.warning("备用 context[%d/%d] 创建失败: %s", i + 2, cookie_manager.count,
+                                   str(e)[:80])
+                    # 必须清理已创建的资源, 否则浏览器进程泄漏
+                    if apg:
+                        try:
+                            await apg.close()
+                        except Exception:
+                            pass
+                    if actx:
+                        try:
+                            cookie_manager.unregister_context(actx)
+                            await actx.close()
+                        except Exception:
+                            pass
 
             api_page = await ctx.new_page()
             all_pages = [api_page] + alt_pages  # 全部 cookie 对应的 page
@@ -396,7 +412,7 @@ async def scrape_up_videos(
             delay_factor = max(0.5, 1.0 / cookie_count + 0.15) if cookie_count >= 2 else 1.0
 
             try:
-                await api_page.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
+                await api_page.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
 
                 # 预取首页: 在 sleep 期间发起请求, 隐藏网络往返延迟
                 pg_first = all_pages[(current_pn - 1) % cookie_count]
@@ -477,6 +493,7 @@ async def scrape_up_videos(
                         pass
                 for actx in alt_ctxs:
                     try:
+                        cookie_manager.unregister_context(actx)
                         await actx.close()
                     except Exception:
                         pass
@@ -538,7 +555,7 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
         # 登录过期 → 删除当前 Cookie, 下次换下一个
         if code in (-101, 3, -6):
             logger.error("Cookie 已过期! code=%d pn=%d, 自动删除", code, pn)
-            cookie_manager.mark_current_invalid()
+            await cookie_manager.mark_invalid(page.context)
             if cookie_manager.count == 0:
                 logger.error("所有 Cookie 已用尽! 后续请求将无登录态")
         if code in (-352, -412):

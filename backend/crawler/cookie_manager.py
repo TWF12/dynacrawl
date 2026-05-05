@@ -2,6 +2,7 @@
 import json
 import logging
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from backend.config import COOKIE_DIR
@@ -22,7 +23,9 @@ class CookieManager:
         self._files: list[Path] = []
         self._index: int = 0
         self._initialized: bool = False
-        self._current_file: Optional[Path] = None
+        self._lock = asyncio.Lock()
+        # context → filepath 映射, 用于精确删除过期 cookie (防多任务竞态删错)
+        self._context_file: dict[int, Path] = {}
 
     def _scan(self):
         if self._initialized:
@@ -37,44 +40,57 @@ class CookieManager:
         self._scan()
         return len(self._files)
 
-    def get_next(self) -> Optional[dict]:
-        """返回下一个有效 cookie 的 storage_state, 自动跳过已删除的文件"""
-        self._scan()
-        if not self._files:
-            return None
+    async def get_next(self) -> tuple[Optional[dict], Optional[Path]]:
+        """返回 (storage_state, filepath), 自动跳过已删除的文件"""
+        async with self._lock:
+            self._scan()
+            if not self._files:
+                return None, None
 
-        # 清理已失效的条目
-        self._files = [f for f in self._files if f.exists()]
-        if not self._files:
-            return None
-
-        # 轮换: 返回当前索引, 然后前进
-        idx = self._index % len(self._files)
-        self._index = (self._index + 1) % len(self._files)
-
-        filepath = self._files[idx]
-        self._current_file = filepath
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning("Cookie 加载失败, 跳过: %s", filepath.name)
-            return None
-
-    def mark_current_invalid(self):
-        """标记当前正在使用的 cookie 为无效并删除"""
-        if self._current_file and self._current_file.exists():
-            self._current_file.unlink()
-            logger.warning("已删除过期 Cookie: %s", self._current_file.name)
+            # 清理已失效的条目
             self._files = [f for f in self._files if f.exists()]
-            self._current_file = None
+            if not self._files:
+                return None, None
 
-    def mark_invalid(self, storage_state: dict = None, filename: str = None):
-        """标记 cookie 为无效并删除文件"""
-        target = None
-        if filename:
-            target = COOKIE_DIR / filename
-        if target and target.exists():
+            # 轮换: 返回当前索引, 然后前进
+            idx = self._index % len(self._files)
+            self._index = (self._index + 1) % len(self._files)
+
+            filepath = self._files[idx]
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    return json.load(f), filepath
+            except Exception as e:
+                logger.warning("Cookie 加载失败, 跳过: %s", filepath.name)
+                return None, None
+
+    def register_context(self, ctx, filepath: Path):
+        """关联 context 与 cookie 文件, 用于后续精确删除"""
+        if filepath:
+            self._context_file[id(ctx)] = filepath
+
+    def unregister_context(self, ctx):
+        """解除 context 关联"""
+        self._context_file.pop(id(ctx), None)
+
+    async def mark_invalid(self, ctx=None):
+        """标记 cookie 为无效并删除。传 ctx 时精确删除对应文件, 不传则删 _files 中第一个"""
+        async with self._lock:
+            target = None
+            if ctx:
+                target = self._context_file.pop(id(ctx), None)
+            if not target and self._files:
+                target = self._files[0]
+
+            if target and target.exists():
+                target.unlink()
+                logger.warning("已删除过期 Cookie: %s", target.name)
+                self._files = [f for f in self._files if f.exists()]
+
+    def mark_invalid_by_name(self, filename: str):
+        """按文件名删除 cookie"""
+        target = COOKIE_DIR / filename
+        if target.exists():
             target.unlink()
             logger.warning("已删除过期 Cookie: %s", target.name)
             self._files = [f for f in self._files if f.exists()]
