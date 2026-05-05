@@ -15,14 +15,27 @@ logger = logging.getLogger(__name__)
 
 
 def _fmt_error(e: Exception) -> str:
-    """精简异常消息: 去 URL/常见冗余, 限 80 字符"""
+    """精简异常消息: Playwright 错误→中文, 限 50 字符"""
     msg = str(e).split("\n")[0].strip()
-    msg = re.sub(r'https?://\S+', '', msg)          # 去掉完整 URL
-    msg = re.sub(r'\s*at\s*$', '', msg)             # 去掉末尾 "at "
-    msg = re.sub(r'Page\.goto:\s*', '', msg)        # 去掉 "Page.goto: " 前缀
-    msg = re.sub(r'Call log:.*', '', msg)           # 去掉调用日志
+    # 常见 Playwright 错误 → 中文短语
+    _ERR_MAP = {
+        "net::ERR_PROXY_CONNECTION_FAILED": "代理不通",
+        "net::ERR_PROXY_CONNECTION_REFUSED": "代理拒绝",
+        "net::ERR_CONNECTION_CLOSED": "连接断开",
+        "net::ERR_CONNECTION_RESET": "连接重置",
+        "net::ERR_TIMEOUT": "超时",
+        "net::ERR_NAME_NOT_RESOLVED": "DNS失败",
+        "net::ERR_TUNNEL_CONNECTION_FAILED": "隧道不通",
+        "Timeout": "超时",
+    }
+    for en, zh in _ERR_MAP.items():
+        if en in msg:
+            return zh
+    # 去掉 URL 和其他冗余
+    msg = re.sub(r'https?://\S+', '', msg)
+    msg = re.sub(r'Page\.goto:\s*', '', msg)
     msg = msg.strip()
-    return msg[:80] if len(msg) > 80 else msg
+    return msg[:50] if len(msg) > 50 else msg
 
 
 ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
