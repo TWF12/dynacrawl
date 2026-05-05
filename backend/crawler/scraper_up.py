@@ -224,13 +224,13 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
     """渐进延迟: 按进度比例缩放, 小UP快大UP慢, 兼顾效率与风控"""
     ratio = pn / max(total_pages, 20)
     if ratio <= 0.15:
-        return random.uniform(3, 8)
+        return random.uniform(2, 6)
     elif ratio <= 0.4:
-        return random.uniform(8, 20)
+        return random.uniform(6, 15)
     elif ratio <= 0.7:
-        return random.uniform(15, 35)
+        return random.uniform(12, 25)
     else:
-        return random.uniform(25, 50)
+        return random.uniform(18, 35)
 
 
 async def _init_session(ctx, uid: str) -> str | None:
@@ -398,17 +398,23 @@ async def scrape_up_videos(
             try:
                 await api_page.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
 
+                # 预取首页: 在 sleep 期间发起请求, 隐藏网络往返延迟
+                pg_first = all_pages[(current_pn - 1) % cookie_count]
+                pending = asyncio.ensure_future(_fetch_arc_page(pg_first, uid, current_pn, mixin_key))
+                first_delay = _progressive_delay(current_pn, total_pages) * delay_factor
+                await asyncio.sleep(first_delay)
+
                 while session_pages < max_session_pages and current_pn <= total_pages:
                     if task_id and is_task_cancelled(task_id):
                         logger.info("任务 %s 已取消, 停止采集", task_id)
+                        if pending and not pending.done():
+                            pending.cancel()
                         break
 
-                    # 按页号轮换 cookie: page 0→cookie0, page 1→cookie1, ...
-                    pg = all_pages[(current_pn - 1) % cookie_count]
-                    delay = _progressive_delay(current_pn, total_pages) * delay_factor
-                    await asyncio.sleep(delay)
-
-                    data, ratelimited = await _fetch_arc_page(pg, uid, current_pn, mixin_key)
+                    # 等待预取结果 (上一轮 sleep 期间已发起请求)
+                    data, ratelimited = await pending
+                    pending = None
+                    should_break = False
 
                     if data is not None:
                         before = len(videos)
@@ -422,7 +428,7 @@ async def scrape_up_videos(
                     elif ratelimited:
                         logger.warning("第 %d 页风控, 切换 session (当前 session 已请求 %d 页)",
                                        current_pn, session_pages)
-                        break
+                        should_break = True
                     else:
                         logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
                         await asyncio.sleep(random.uniform(5, 10))
@@ -445,13 +451,23 @@ async def scrape_up_videos(
                             current_pn += 1
                             if consecutive_failures >= 3:
                                 logger.warning("连续 %d 页失败, 切换 session", consecutive_failures)
-                                break
+                                should_break = True
+
+                    if should_break:
+                        break
 
                     if progress_callback:
                         await progress_callback(
                             current_pn - 1, total_pages,
                             f"第 {current_pn - 1}/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条"
                         )
+
+                    # 预取下一页: sleep 与 fetch 并发, 省掉网络往返时间
+                    if current_pn <= total_pages:
+                        next_pg = all_pages[(current_pn - 1) % cookie_count]
+                        next_delay = _progressive_delay(current_pn, total_pages) * delay_factor
+                        pending = asyncio.ensure_future(_fetch_arc_page(next_pg, uid, current_pn, mixin_key))
+                        await asyncio.sleep(next_delay)
             finally:
                 await api_page.close()
                 for apg in alt_pages:
