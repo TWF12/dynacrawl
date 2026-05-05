@@ -375,22 +375,26 @@ async def scrape_up_videos(
             session_pages = 0
             consecutive_failures = 0
 
-            # cookie≥2 时创建第2个 context(不同cookie), 交替翻页分摊请求
-            ctx2 = None
-            api_page2 = None
-            if cookie_manager.count >= 2:
+            # 按 cookie 数量创建备用 context, 所有 cookie 均匀分摊请求
+            alt_ctxs: list = []
+            alt_pages: list = []
+            extra_cookies = cookie_manager.count - 1  # 主 context 已用 1 个
+            for i in range(extra_cookies):
                 try:
-                    # 绕过 semaphore: 多任务时不会因占槽而死锁
-                    ctx2 = await browser_pool._new_headful_context(rotate=False)
-                    api_page2 = await ctx2.new_page()
-                    await api_page2.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
+                    actx = await browser_pool._new_headful_context(rotate=False)
+                    apg = await actx.new_page()
+                    await apg.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
+                    alt_ctxs.append(actx)
+                    alt_pages.append(apg)
                 except Exception:
-                    logger.warning("第2个 context 创建失败, 单 cookie 运行")
-                    ctx2 = None
-                    api_page2 = None
+                    logger.warning("第%d个备用 context 创建失败, 跳过", i + 2)
 
-            # api_page 复用
             api_page = await ctx.new_page()
+            all_pages = [api_page] + alt_pages  # 全部 cookie 对应的 page
+            cookie_count = len(all_pages)
+            # 延迟系数: cookie 越多越安全降延迟, 最低 0.5
+            delay_factor = max(0.5, 1.0 / cookie_count + 0.15) if cookie_count >= 2 else 1.0
+
             try:
                 await api_page.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
 
@@ -399,12 +403,9 @@ async def scrape_up_videos(
                         logger.info("任务 %s 已取消, 停止采集", task_id)
                         break
 
-                    # cookie≥2 时每页换不同 context/cookie, 延迟降低30%
-                    use_alt = ctx2 and (current_pn % 2 == 0)
-                    pg = api_page2 if use_alt else api_page
-                    delay = _progressive_delay(current_pn, total_pages)
-                    if ctx2:
-                        delay *= 0.7  # 每cookie减半请求, 安全降延迟
+                    # 按页号轮换 cookie: page 0→cookie0, page 1→cookie1, ...
+                    pg = all_pages[(current_pn - 1) % cookie_count]
+                    delay = _progressive_delay(current_pn, total_pages) * delay_factor
                     await asyncio.sleep(delay)
 
                     data, ratelimited = await _fetch_arc_page(pg, uid, current_pn, mixin_key)
@@ -425,8 +426,8 @@ async def scrape_up_videos(
                     else:
                         logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
                         await asyncio.sleep(random.uniform(5, 10))
-                        # 重试用另一个 context (换cookie), 提高成功率
-                        pg_retry = api_page2 if not use_alt and api_page2 else api_page
+                        # 重试用下一个 cookie
+                        pg_retry = all_pages[current_pn % cookie_count] if cookie_count > 1 else api_page
                         data2, _ = await _fetch_arc_page(pg_retry, uid, current_pn, mixin_key)
                         if data2 is not None:
                             before = len(videos)
@@ -453,10 +454,16 @@ async def scrape_up_videos(
                         )
             finally:
                 await api_page.close()
-                if api_page2:
-                    await api_page2.close()
-                if ctx2:
-                    await ctx2.close()
+                for apg in alt_pages:
+                    try:
+                        await apg.close()
+                    except Exception:
+                        pass
+                for actx in alt_ctxs:
+                    try:
+                        await actx.close()
+                    except Exception:
+                        pass
 
             # 主动轮换: session 到达页数上限
             if session_pages >= max_session_pages and current_pn <= total_pages:
