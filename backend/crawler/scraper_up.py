@@ -335,8 +335,13 @@ async def scrape_up_videos(
             errors.append("任务已取消")
             break
 
+        # Cookie 全部用尽, 继续也无法正常采集
+        if cookie_manager.count == 0:
+            logger.error("所有 Cookie 已用尽, 无法继续采集")
+            errors.append("Cookie已用尽")
+            break
+
         async with browser_pool.acquire_headful_context() as ctx:
-            # 新 session: 重新加载投稿页获取 mixin_key
             mixin_key = await _init_session(ctx, uid)
             if not mixin_key:
                 session_init_failures += 1
@@ -468,6 +473,8 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
         if code in (-101, 3, -6):
             logger.error("Cookie 已过期! code=%d pn=%d, 自动删除", code, pn)
             cookie_manager.mark_current_invalid()
+            if cookie_manager.count == 0:
+                logger.error("所有 Cookie 已用尽! 后续请求将无登录态")
         if code in (-352, -412):
             logger.error("风控! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
             await asyncio.sleep(random.uniform(30, 60))
