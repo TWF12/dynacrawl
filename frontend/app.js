@@ -167,6 +167,10 @@ const app = createApp({
             }, 2000);
         }
         onMounted(function () { loadTasks(); _startAutoRefresh(); });
+        // 页面切回前台时立即刷新, 解决浏览器后台节流定时器问题
+        document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) { loadTasks(); if (selectedTask.value) loadTaskDetail(selectedTask.value.id); }
+        });
         onUnmounted(function () { if (wsConnection) wsConnection.close(); if (_taskListTimer) clearInterval(_taskListTimer); });
 
         return { newTask, submitting, tasks, taskTotal, taskPage, taskPageSize, selectedTask, taskDetail, wsProgress,
