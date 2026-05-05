@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import Optional, Callable, Awaitable
 
@@ -14,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 
 def _fmt_error(e: Exception) -> str:
-    """从异常中提取首行关键信息，截断到 200 字符"""
-    first_line = str(e).split("\n")[0].strip()
-    return first_line[:200] if len(first_line) > 200 else first_line
+    """精简异常消息: 去冗长 URL + 限 100 字符"""
+    msg = str(e).split("\n")[0].strip()
+    msg = re.sub(r'https?://\S+', '[URL]', msg)
+    return msg[:100] if len(msg) > 100 else msg
 
 
 ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
@@ -250,13 +252,41 @@ async def process_url_message(
 
             task = await session.get(Task, task_id)
             if task:
-                failed_result = await session.execute(
+                # 重算所有计数器
+                completed = (await session.execute(
                     select(func.count()).select_from(UrlRecord).where(
-                        UrlRecord.task_id == task_id, UrlRecord.status == "failed"))
-                task.failed_urls = failed_result.scalar() or 0
+                        UrlRecord.task_id == task_id, UrlRecord.status == "completed"))).scalar() or 0
+                partial = (await session.execute(
+                    select(func.count()).select_from(UrlRecord).where(
+                        UrlRecord.task_id == task_id, UrlRecord.status == "partial"))).scalar() or 0
+                failed = (await session.execute(
+                    select(func.count()).select_from(UrlRecord).where(
+                        UrlRecord.task_id == task_id, UrlRecord.status == "failed"))).scalar() or 0
+                task.completed_urls = completed + partial + failed
+                task.failed_urls = failed
                 task.updated_at = datetime.now()
 
+                # 所有 URL 都处理完 → 更新任务最终状态
+                remaining = (await session.execute(
+                    select(func.count()).select_from(UrlRecord).where(
+                        UrlRecord.task_id == task_id,
+                        UrlRecord.status.in_(["pending", "processing"])))
+                ).scalar() or 0
+                if remaining == 0:
+                    if failed > 0:
+                        task.status = TaskStatus.FAILED.value
+                    elif partial > 0:
+                        task.status = "partial"
+                    else:
+                        task.status = TaskStatus.COMPLETED.value
+
             await session.commit()
+
+            if progress_callback and task:
+                await progress_callback(
+                    task_id, task.completed_urls, task.total_urls, task.failed_urls,
+                    f"失败: {url_type}")
+
         except Exception as inner_e:
             logger.error(f"更新失败状态时出错: {inner_e}")
             await session.rollback()
