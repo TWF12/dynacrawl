@@ -70,13 +70,12 @@ const app = createApp({
         async function loadTaskDetail(taskId) {
             try {
                 const res = await axios.get("/api/tasks/" + taskId + "/results");
+                // 只更新当前选中任务的数据, 防止旧 WS 回调覆盖新任务的 detail
+                if (!selectedTask.value || selectedTask.value.id !== taskId) return;
                 Object.assign(taskDetail, res.data);
-                // 只更新当前选中任务的进度
-                if (selectedTask.value && selectedTask.value.id === taskId) {
-                    const t = res.data.task;
-                    wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
-                    wsProgress.message = res.data.progress_message || "";
-                }
+                const t = res.data.task;
+                wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
+                wsProgress.message = res.data.progress_message || "";
             } catch (e) { console.error(e); }
         }
 
