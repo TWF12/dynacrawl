@@ -165,6 +165,9 @@ const app = createApp({
         function _startAutoRefresh() {
             if (_taskListTimer) return;
             _taskListTimer = setInterval(async function () {
+                const hasActive = tasks.value.some(t => t.status === "pending" || t.status === "running" || t.status === "processing");
+                // 有活跃任务或详情打开时轮询, 全完成且未开详情则停
+                if (!hasActive && !selectedTask.value) return;
                 await loadTasks();
                 if (selectedTask.value) {
                     const updated = tasks.value.find(t => t.id === selectedTask.value.id);
