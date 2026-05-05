@@ -113,9 +113,10 @@ frontend/
 
 - 启动时扫描 `pending`/`running`/`failed` 状态的任务
 - 查找 `pending`/`processing`/`failed` 状态的 URL 重新入队
-- **重新入队前清理旧数据**：按 URL 类型删除上次部分采集残留的行，避免重复累积
+- **已爬数据保留不删**，`scrape_up_videos` 通过 `existing_bvids` 跳过已有 BV
+- 根据已有视频数自动计算续爬起始页 `max(2, existing_count // 50 + 1)`
+- 全部已爬完则跳过不再重复采集
 - 重算 `task.completed_urls` / `task.failed_urls` 确保进度条准确
-- 已完成的 URL 不重复采集
 
 ### 错误处理
 

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func
 from backend.database import async_session
 from backend.models import Task, UrlRecord, UpInfo, VideoInfo, Comment
 from backend.schemas import SceneType, TaskStatus
@@ -142,22 +142,7 @@ async def recover_pending_tasks(dispatcher=None) -> int:
 
             urls_to_queue = []
             for url in urls:
-                # 清理该 URL 上次部分采集的旧数据，避免恢复后重复累积
-                if url.url_type == "up_video_list":
-                    await session.execute(
-                        delete(VideoInfo).where(VideoInfo.task_id == task.id))
-                elif url.url_type == "up_api":
-                    await session.execute(
-                        delete(UpInfo).where(UpInfo.task_id == task.id))
-                elif url.url_type == "video_api":
-                    await session.execute(
-                        delete(VideoInfo).where(VideoInfo.task_id == task.id,
-                                                VideoInfo.bv_id == task.input_value))
-                elif url.url_type == "video_comments":
-                    await session.execute(
-                        delete(Comment).where(Comment.task_id == task.id,
-                                              Comment.bv_id == task.input_value))
-
+                # 已爬数据保留不删, scrape_up_videos 通过 seen_bvids 跳过已有 BV
                 url.status = "pending"
                 url.retry_count = 0
                 url.error_msg = None

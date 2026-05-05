@@ -253,12 +253,15 @@ async def scrape_up_videos(
     progress_callback: Optional[VideoProgressCallback] = None,
     on_page_done: Optional[PageDoneCallback] = None,
     task_id: str = "",
+    existing_bvids: set[str] = None,
 ) -> dict:
-    """爬取 UP 主的视频列表，自动 session 轮换防风控"""
+    """爬取 UP 主的视频列表，自动 session 轮换防风控。existing_bvids 用于断点续爬"""
+    if existing_bvids is None:
+        existing_bvids = set()
     videos: list[dict] = []
     errors: list[str] = []
     total_count = 0
-    seen_bvids: set[str] = set()
+    seen_bvids: set[str] = set(existing_bvids)
     await random_delay()
 
     async def _save_page(page_videos: list[dict]):
@@ -322,12 +325,22 @@ async def scrape_up_videos(
                 "status": _pick_status(errors, len(videos) > 0)}
 
     # ================================================================
-    # Phase 2: 第 2 页起 — session 轮换 + 渐进延迟
+    # Phase 2: 断点续爬 — 已有 BV 跳过, 从 last_page+1 开始
     # ================================================================
-    current_pn = 2
-    max_session_pages = _session_page_limit(total_pages)
+    existing_count = len(existing_bvids)
+    current_pn = max(2, (existing_count // 50) + 1)
+    if current_pn > total_pages:
+        logger.info("所有 %d 页已采集, 无需续爬", total_pages)
+        return {"videos": videos, "total_count": total_count, "errors": errors,
+                "status": _pick_status(errors, len(videos) > 0)}
+
+    max_session_pages = _session_page_limit(total_pages - current_pn + 1)
     page_errors = 0
-    session_init_failures = 0  # 连续 _init_session 失败计数
+    session_init_failures = 0
+
+    if existing_count > 0:
+        logger.info("断点续爬: 已有 %d 条, 从第 %d/%d 页开始",
+                   existing_count, current_pn, total_pages)
 
     while current_pn <= total_pages:
         if task_id and is_task_cancelled(task_id):

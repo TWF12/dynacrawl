@@ -77,7 +77,6 @@ async def process_url_message(
         result = None
 
         # up_video_list 内部自行创建 headful context, 不要占 acquire_page 的 semaphore
-        # 否则 3 任务各占 2 槽 = 需要 6, BROWSER_CONCURRENCY=3 直接死锁
         if url_type == "up_video_list":
             total_videos = [0]
 
@@ -101,11 +100,18 @@ async def process_url_message(
                         f"视频采集: {message}",
                     )
 
+            # 查询已有 BV 号用于断点续爬
+            existing_rows = (await session.execute(
+                select(VideoInfo.bv_id).where(VideoInfo.task_id == task_id)
+            )).scalars().all()
+            existing_bvids = set(existing_rows)
+
             result = await scrape_up_videos(
                 None, msg.get("uid", ""),
                 progress_callback=_video_progress,
                 on_page_done=_save_page,
                 task_id=task_id,
+                existing_bvids=existing_bvids,
             )
             videos = result.get("videos", [])
             api_total = result.get("total_count", 0)
