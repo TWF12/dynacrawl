@@ -380,8 +380,8 @@ async def scrape_up_videos(
             api_page2 = None
             if cookie_manager.count >= 2:
                 try:
-                    ctx2_cm = browser_pool.acquire_headful_context()
-                    ctx2 = await ctx2_cm.__aenter__()
+                    # 绕过 semaphore: 多任务时不会因占槽而死锁
+                    ctx2 = await browser_pool._new_headful_context(rotate=False)
                     api_page2 = await ctx2.new_page()
                     await api_page2.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
                 except Exception:
@@ -456,7 +456,7 @@ async def scrape_up_videos(
                 if api_page2:
                     await api_page2.close()
                 if ctx2:
-                    await ctx2_cm.__aexit__(None, None, None)
+                    await ctx2.close()
 
             # 主动轮换: session 到达页数上限
             if session_pages >= max_session_pages and current_pn <= total_pages:

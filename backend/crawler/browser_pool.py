@@ -84,9 +84,10 @@ class BrowserPool:
                 self._headful_contexts.remove(context)
                 await context.close()
 
-    async def _new_headful_context(self) -> BrowserContext:
-        """创建已配置隐身 + cookie 的头有 context"""
-        await rotate_proxy_if_needed()
+    async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
+        """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP"""
+        if rotate:
+            await rotate_proxy_if_needed()
         ua = get_random_ua()
         proxy = get_random_proxy()
         storage = cookie_manager.get_next()
