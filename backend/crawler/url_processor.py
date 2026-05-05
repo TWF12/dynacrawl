@@ -185,7 +185,21 @@ async def process_url_message(
                         ))
 
                 elif url_type == "video_comments":
-                    comments = await scrape_video_comments(page, msg.get("bv_id", ""))
+                    bv = msg.get("bv_id", "")
+                    # 尝试从已采集的 video_info 获取 aid, 省一次 API 调用
+                    aid = None
+                    comment_count = 0
+                    vinfo_result = await session.execute(
+                        select(VideoInfo).where(
+                            VideoInfo.task_id == task_id,
+                            VideoInfo.bv_id == bv))
+                    vinfo = vinfo_result.scalars().first()
+                    if vinfo and vinfo.raw_data:
+                        aid = vinfo.raw_data.get("aid")
+                        comment_count = vinfo.comment_count or 0
+
+                    comments, pages = await scrape_video_comments(
+                        page, bv, aid=aid, comment_count=comment_count)
                     for c in comments:
                         session.add(Comment(
                             task_id=task_id, bv_id=c.get("bv_id", ""),
@@ -194,7 +208,7 @@ async def process_url_message(
                             like_count=c.get("like_count"),
                             posted_at=c.get("posted_at"),
                         ))
-                    result = {"comment_count": len(comments)}
+                    result = {"comment_count": len(comments), "comment_pages": pages}
 
         # 采集期间任务可能被删除(级联删除 URL 记录), expire 后重新检查
         session.expire_all()
