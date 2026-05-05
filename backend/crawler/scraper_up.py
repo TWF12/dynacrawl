@@ -375,10 +375,23 @@ async def scrape_up_videos(
             session_pages = 0
             consecutive_failures = 0
 
-            # 复用单个页面发所有 API 请求, 消除每页 new_page/close 开销
+            # cookie≥2 时创建第2个 context(不同cookie), 交替翻页分摊请求
+            ctx2 = None
+            api_page2 = None
+            if cookie_manager.count >= 2:
+                try:
+                    ctx2_cm = browser_pool.acquire_headful_context()
+                    ctx2 = await ctx2_cm.__aenter__()
+                    api_page2 = await ctx2.new_page()
+                    await api_page2.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
+                except Exception:
+                    logger.warning("第2个 context 创建失败, 单 cookie 运行")
+                    ctx2 = None
+                    api_page2 = None
+
+            # api_page 复用
             api_page = await ctx.new_page()
             try:
-                # 先导航到轻量首页建立 session origin
                 await api_page.goto("https://www.bilibili.com/", timeout=10000, wait_until="domcontentloaded")
 
                 while session_pages < max_session_pages and current_pn <= total_pages:
@@ -386,10 +399,15 @@ async def scrape_up_videos(
                         logger.info("任务 %s 已取消, 停止采集", task_id)
                         break
 
+                    # cookie≥2 时每页换不同 context/cookie, 延迟降低30%
+                    use_alt = ctx2 and (current_pn % 2 == 0)
+                    pg = api_page2 if use_alt else api_page
                     delay = _progressive_delay(current_pn, total_pages)
+                    if ctx2:
+                        delay *= 0.7  # 每cookie减半请求, 安全降延迟
                     await asyncio.sleep(delay)
 
-                    data, ratelimited = await _fetch_arc_page(api_page, uid, current_pn, mixin_key)
+                    data, ratelimited = await _fetch_arc_page(pg, uid, current_pn, mixin_key)
 
                     if data is not None:
                         before = len(videos)
@@ -407,7 +425,9 @@ async def scrape_up_videos(
                     else:
                         logger.warning("第 %d 页请求失败, 等待后重试", current_pn)
                         await asyncio.sleep(random.uniform(5, 10))
-                        data2, _ = await _fetch_arc_page(api_page, uid, current_pn, mixin_key)
+                        # 重试用另一个 context (换cookie), 提高成功率
+                        pg_retry = api_page2 if not use_alt and api_page2 else api_page
+                        data2, _ = await _fetch_arc_page(pg_retry, uid, current_pn, mixin_key)
                         if data2 is not None:
                             before = len(videos)
                             _process_arc_data(data2, videos, seen_bvids)
@@ -433,6 +453,10 @@ async def scrape_up_videos(
                         )
             finally:
                 await api_page.close()
+                if api_page2:
+                    await api_page2.close()
+                if ctx2:
+                    await ctx2_cm.__aexit__(None, None, None)
 
             # 主动轮换: session 到达页数上限
             if session_pages >= max_session_pages and current_pn <= total_pages:
