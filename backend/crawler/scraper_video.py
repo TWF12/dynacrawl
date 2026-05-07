@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, report_page_and_rotate
+from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
 
@@ -149,8 +149,9 @@ async def scrape_video_comments(
                         await pg.wait_for_timeout(2000)
 
                 if not mixin_key:
-                    logger.warning("mixin_key 获取失败 bv=%s, 换代理重试", bv_id)
-                    continue  # 跳出此 session, 外层 while 创建新 context (换 IP + cookie)
+                    logger.warning("mixin_key 获取失败 bv=%s, 强制换代理重试", bv_id)
+                    await rotate_proxy_if_needed()  # 当前节点坏了, 立即换
+                    continue
 
                 for _pn in range(pn, session_end):
                     if _pn > 1:
