@@ -127,8 +127,7 @@ async def scrape_video_comments(
 
     api_pages = min(max_pages, max(1, (comment_count + 49) // 50))
 
-    # 直连 (reply API 不需要代理, 代理 IP 反而被 B站 标记)
-    async with browser_pool.acquire_headful_context(use_proxy=False) as ctx:
+    async with browser_pool.acquire_headful_context() as ctx:
         pg = await ctx.new_page()
         try:
             # 获取 WBI 签名密钥

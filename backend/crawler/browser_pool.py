@@ -72,11 +72,11 @@ class BrowserPool:
                 await context.close()
 
     @asynccontextmanager
-    async def acquire_headful_context(self, use_proxy: bool = True):
+    async def acquire_headful_context(self):
         """获取头有浏览器 context（可建多个 page 用于并发），已加载登录 cookie"""
         async with self._semaphore:
             await self._ensure_headful_browser()
-            context = await self._new_headful_context(use_proxy=use_proxy)
+            context = await self._new_headful_context()
             self._headful_contexts.append(context)
             try:
                 yield context
@@ -85,12 +85,12 @@ class BrowserPool:
                 cookie_manager.unregister_context(context)
                 await context.close()
 
-    async def _new_headful_context(self, rotate: bool = True, use_proxy: bool = True) -> BrowserContext:
-        """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP, use_proxy=False 时直连"""
-        if rotate and use_proxy:
+    async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
+        """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP"""
+        if rotate:
             await rotate_proxy_if_needed()
         ua = get_random_ua()
-        proxy = get_random_proxy() if use_proxy else None
+        proxy = get_random_proxy()
         storage, filepath = await cookie_manager.get_next()
         context = await self._headful_browser.new_context(
             user_agent=ua,
