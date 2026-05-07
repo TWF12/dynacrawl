@@ -150,15 +150,22 @@ def _clash_exit_ip() -> str:
 
 
 async def _auto_detect_group() -> str | None:
-    """未指定 CLASH_GROUP 时自动检测第一个可用的选择组"""
-    SKIP_GROUPS = {"DIRECT", "REJECT", "GLOBAL"}
+    """未指定 CLASH_GROUP 时: 优先 Selector 类型, 其次 URLTest (URLTest 会被自动测速覆盖)"""
+    SKIP_GROUPS = {"DIRECT", "REJECT"}
     try:
         data = await asyncio.to_thread(_clash_get, "/proxies")
         proxies = data.get("proxies", {})
+        # 优先 Selector 类型 (手动切换不会被覆盖)
         for name, info in proxies.items():
-            if info.get("type") in ("Selector", "URLTest", "Fallback"):
+            if info.get("type") == "Selector":
                 if name not in SKIP_GROUPS and "广告" not in name and "漏网" not in name:
-                    _safe_log("Clash 检测到代理组: %s", name)
+                    _safe_log("Clash 代理组(Selector): %s", name)
+                    return name
+        # 降级到 URLTest
+        for name, info in proxies.items():
+            if info.get("type") in ("URLTest", "Fallback"):
+                if name not in SKIP_GROUPS and "广告" not in name and "漏网" not in name:
+                    _safe_log("Clash 代理组(URLTest): %s", name)
                     return name
     except Exception:
         pass
