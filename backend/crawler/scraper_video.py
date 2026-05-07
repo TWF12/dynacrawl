@@ -126,7 +126,7 @@ async def scrape_video_comments(
         return comments, 0
 
     api_pages = min(max_pages, max(1, (comment_count + 99) // 100))
-    SESSION_PAGES = 5  # 每 5 页轮换 context (换 IP + cookie)
+    SESSION_PAGES = 3  # 每 3 页轮换 context (换 IP + cookie), 防风控
 
     pn = 1
     while pn <= api_pages:

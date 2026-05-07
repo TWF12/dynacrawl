@@ -253,11 +253,10 @@ def _parse_proxy_url(raw: str) -> dict | None:
 
 async def rotate_proxy_if_needed() -> str | None:
     """轮换出口 IP: 优先 Clash API 切换节点, 否则轮换 PROXY_LIST, 返回描述"""
-    # 方式 1: Clash API 轮换 (仅当 CLASH_GROUP 明确指定时, 避免 GLOBAL 并发冲突)
-    if CLASH_GROUP:
-        clash_node = await _rotate_clash_proxy()
-        if clash_node:
-            return clash_node
+    # 方式 1: Clash API 轮换
+    clash_node = await _rotate_clash_proxy()
+    if clash_node:
+        return clash_node
 
     # 方式 2: PROXY_LIST 多代理轮换 (直接在代理地址间切换)
     global _current_proxy_index
