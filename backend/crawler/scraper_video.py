@@ -3,14 +3,14 @@ import time
 import random
 import logging
 from typing import Optional
+from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay
+from backend.crawler.wbi_sign import sign_params, get_mixin_key
+from backend.crawler.browser_pool import browser_pool
 
 logger = logging.getLogger(__name__)
-
-# API 调用轻量延迟, 页面降级仍用标准延迟
-_API_DELAY = (0.5, 2.0)
 
 
 def _comment_delay(pn: int, max_pages: int) -> float:
@@ -22,26 +22,6 @@ def _comment_delay(pn: int, max_pages: int) -> float:
         return random.uniform(2, 5)
     else:
         return random.uniform(4, 8)
-
-
-async def _fetch_json(page: Page, url: str, referer: str = "https://www.bilibili.com/") -> Optional[dict]:
-    """通过 page API 请求 JSON, 带 Referer 防检测"""
-    await page.set_extra_http_headers({
-        "Referer": referer,
-        "Origin": "https://www.bilibili.com",
-    })
-    resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-    if resp and resp.ok:
-        text = await page.evaluate("() => document.body.innerText")
-        return json.loads(text)
-    return None
-
-
-async def _handle_rate_limit(page: Page, url: str, referer: str, code: int) -> Optional[dict]:
-    """-352/-412 风控重试: 等待 30-60s 后重试一次"""
-    logger.warning("风控 code=%d, 等待30-60s后重试", code)
-    await page.wait_for_timeout(random.randint(30000, 60000))
-    return await _fetch_json(page, url, referer)
 
 
 async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
@@ -132,69 +112,88 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
 
 
 async def scrape_video_comments(
-    page: Page, bv_id: str, aid: int = None, comment_count: int = 0, max_pages: int = 5
+    page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0, max_pages: int = 50
 ) -> tuple[list[dict], int]:
-    """爬取视频评论。aid/comment_count 从 video_info 传入可省一次 API 调用"""
+    """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
     comments = []
     api_pages = 0
 
-    # 获取 aid
+    # 获取 aid (page 为 headless 时用于获取 aid, 为 None 时用 headful)
     if not aid:
-        await page.wait_for_timeout(random.randint(500, 2000))
-        try:
-            view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv_id}"
-            data = await _fetch_json(page, view_url)
-            if data and data.get("code") == 0:
-                aid = data["data"].get("aid")
-                comment_count = data["data"].get("stat", {}).get("reply", 0)
-        except Exception as e:
-            logger.error("获取视频 aid 失败 bv_id=%s: %s", bv_id, e)
+        if page is not None:
+            await page.wait_for_timeout(random.randint(500, 2000))
+            try:
+                view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv_id}"
+                resp = await page.goto(view_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                if resp and resp.ok:
+                    text = await page.evaluate("() => document.body.innerText")
+                    data = json.loads(text)
+                    if data.get("code") == 0:
+                        aid = data["data"].get("aid")
+                        comment_count = data["data"].get("stat", {}).get("reply", 0)
+            except Exception as e:
+                logger.error("获取视频 aid 失败 bv_id=%s: %s", bv_id, e)
 
     if not aid:
-        logger.warning("无法获取 aid，跳过评论采集 bv_id=%s", bv_id)
+        logger.warning("无法获取 aid, 跳过评论采集 bv_id=%s", bv_id)
         return comments, 0
 
-    # 动态页数: 按评论数估算, 最少 1 页, 最多 max_pages
-    if comment_count > 0:
-        api_pages = min(max_pages, max(1, (comment_count + 19) // 20))
+    api_pages = min(max_pages, max(1, (comment_count + 19) // 20))
 
-    for pn in range(1, api_pages + 1):
-        if pn > 1:
-            delay = _comment_delay(pn, api_pages)
-            await page.wait_for_timeout(int(delay * 1000))
-
+    # headful context + WBI 签名 (跟 arc/search 完全相同的模式)
+    async with browser_pool.acquire_headful_context() as ctx:
+        pg = await ctx.new_page()
         try:
-            reply_url = (
-                f"https://api.bilibili.com/x/v2/reply/main"
-                f"?oid={aid}&type=1&ps=20&pn={pn}&sort=2"
-            )
-            referer = f"https://www.bilibili.com/video/{bv_id}"
-            data = await _fetch_json(page, reply_url, referer)
+            # 获取 WBI 签名密钥
+            mixin_key = None
+            try:
+                resp = await pg.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
+                if resp and resp.ok:
+                    await pg.wait_for_timeout(500)
+                    mixin_key = await get_mixin_key(pg)
+            except Exception:
+                pass
 
-            if not data:
-                continue
+            for pn in range(1, api_pages + 1):
+                if pn > 1:
+                    delay = _comment_delay(pn, api_pages)
+                    await pg.wait_for_timeout(int(delay * 1000))
 
-            code = data.get("code")
-            if code in (-352, -412):
-                data = await _handle_rate_limit(page, reply_url, referer, code)
+                try:
+                    params = {"oid": str(aid), "type": "1", "ps": "20", "pn": str(pn), "sort": "2"}
+                    if mixin_key:
+                        params = sign_params(params, mixin_key)
+                    reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
 
-            if not data or data.get("code") != 0:
-                break
+                    resp = await pg.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                    if not resp or not resp.ok:
+                        continue
+                    text = await pg.evaluate("() => document.body.innerText")
+                    data = json.loads(text)
 
-            replies = data.get("data", {}).get("replies", []) or []
-            for r in replies:
-                comments.append({
-                    "bv_id": bv_id,
-                    "username": r.get("member", {}).get("uname", ""),
-                    "content": r.get("content", {}).get("message", ""),
-                    "like_count": r.get("like", 0),
-                    "posted_at": time.strftime(
-                        "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
-                    ) if r.get("ctime") else "",
-                })
-            if len(replies) < 20:
-                break
-        except Exception as e:
-            logger.error("爬取评论失败 pn=%d bv_id=%s: %s", pn, bv_id, e)
+                    code = data.get("code")
+                    if code in (-352, -412):
+                        logger.warning("reply API code=%d pn=%d bv=%s", code, pn, bv_id)
+                        continue
+                    if code != 0:
+                        break
+
+                    replies = data.get("data", {}).get("replies", []) or []
+                    for r in replies:
+                        comments.append({
+                            "bv_id": bv_id,
+                            "username": r.get("member", {}).get("uname", ""),
+                            "content": r.get("content", {}).get("message", ""),
+                            "like_count": r.get("like", 0),
+                            "posted_at": time.strftime(
+                                "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
+                            ) if r.get("ctime") else "",
+                        })
+                    if len(replies) < 20:
+                        break
+                except Exception as e:
+                    logger.error("爬取评论失败 pn=%d bv_id=%s: %s", pn, bv_id, e)
+        finally:
+            await pg.close()
 
     return comments, api_pages
