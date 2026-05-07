@@ -201,8 +201,15 @@ async def process_url_message(
                 aid = vinfo.raw_data.get("aid")
                 comment_count = vinfo.comment_count or 0
 
+            async def _comment_progress(current: int, total: int, message: str):
+                if progress_callback:
+                    await progress_callback(task_id, 0, 0, 0,
+                        f"评论采集: {message}",
+                        video_current=current, video_total=total)
+
             comments, pages = await scrape_video_comments(
-                None, bv, aid=aid, comment_count=comment_count)
+                None, bv, aid=aid, comment_count=comment_count,
+                progress_callback=_comment_progress)
             for c in comments:
                 session.add(Comment(
                     task_id=task_id, bv_id=c.get("bv_id", ""),

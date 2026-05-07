@@ -1,6 +1,7 @@
 import json
 import time
 import random
+import asyncio as _asyncio
 import logging
 from typing import Optional
 from urllib.parse import urlencode
@@ -98,14 +99,22 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
     return result
 
 
+def _session_comment_limit(total_pages: int) -> int:
+    """评论采集单 session 翻页上限: 每 ~30% 页数轮换, 防风控"""
+    if total_pages <= 10:
+        return total_pages
+    return max(10, int(total_pages * 0.3))
+
+
 async def scrape_video_comments(
-    page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0, max_pages: int = 50
+    page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0,
+    max_pages: int = 50, progress_callback=None,
 ) -> tuple[list[dict], int]:
-    """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
+    """爬取视频评论(headful + WBI签名 + session轮换, 同 up_video_list 模式)"""
     comments = []
     api_pages = 0
 
-    # 获取 aid (page 为 headless 时用于获取 aid, 为 None 时用 headful)
+    # 获取 aid
     if not aid:
         if page is not None:
             await page.wait_for_timeout(random.randint(500, 2000))
@@ -126,61 +135,101 @@ async def scrape_video_comments(
         return comments, 0
 
     api_pages = min(max_pages, max(1, (comment_count + 19) // 20))
+    max_session_pages = _session_comment_limit(api_pages)
+    pn = 1
+    page_errors = 0
 
-    # headful context + WBI 签名 (跟 arc/search 完全相同的模式)
-    async with browser_pool.acquire_headful_context() as ctx:
-        pg = await ctx.new_page()
-        try:
-            # 获取 WBI 签名密钥
-            mixin_key = None
+    while pn <= api_pages:
+        session_pages = 0
+        consecutive_failures = 0
+        if page_errors > 0:
+            await _asyncio.sleep(random.uniform(5, 15))  # 错误后额外等待
+
+        async with browser_pool.acquire_headful_context() as ctx:
+            pg = await ctx.new_page()
             try:
-                resp = await pg.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
-                if resp and resp.ok:
-                    await pg.wait_for_timeout(500)
-                    mixin_key = await get_mixin_key(pg)
-            except Exception:
-                pass
-
-            for pn in range(1, api_pages + 1):
-                if pn > 1:
-                    delay = _comment_delay(pn, api_pages)
-                    await pg.wait_for_timeout(int(delay * 1000))
-
+                # 获取 WBI 签名密钥
+                mixin_key = None
                 try:
-                    params = {"oid": str(aid), "type": "1", "ps": "20", "pn": str(pn), "sort": "2"}
-                    if mixin_key:
-                        params = sign_params(params, mixin_key)
-                    reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
+                    resp = await pg.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
+                    if resp and resp.ok:
+                        await pg.wait_for_timeout(500)
+                        mixin_key = await get_mixin_key(pg)
+                except Exception:
+                    pass
 
-                    resp = await pg.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-                    if not resp or not resp.ok:
-                        continue
-                    text = await pg.evaluate("() => document.body.innerText")
-                    data = json.loads(text)
+                while session_pages < max_session_pages and pn <= api_pages:
+                    if pn > 1 or session_pages > 0:
+                        delay = _comment_delay(pn, api_pages)
+                        if session_pages > max_session_pages * 0.7:
+                            delay *= 1.5  # session 末期加延迟
+                        await pg.wait_for_timeout(int(delay * 1000))
 
-                    code = data.get("code")
-                    if code in (-352, -412):
-                        logger.warning("reply API code=%d pn=%d bv=%s", code, pn, bv_id)
-                        continue
-                    if code != 0:
-                        break
+                    try:
+                        params = {"oid": str(aid), "type": "1", "ps": "20", "pn": str(pn), "sort": "2"}
+                        if mixin_key:
+                            params = sign_params(params, mixin_key)
+                        reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
 
-                    replies = data.get("data", {}).get("replies", []) or []
-                    for r in replies:
-                        comments.append({
-                            "bv_id": bv_id,
-                            "username": r.get("member", {}).get("uname", ""),
-                            "content": r.get("content", {}).get("message", ""),
-                            "like_count": r.get("like", 0),
-                            "posted_at": time.strftime(
-                                "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
-                            ) if r.get("ctime") else "",
-                        })
-                    if len(replies) < 20:
-                        break
-                except Exception as e:
-                    logger.error("爬取评论失败 pn=%d bv_id=%s: %s", pn, bv_id, e)
-        finally:
-            await pg.close()
+                        resp = await pg.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                        if not resp or not resp.ok:
+                            consecutive_failures += 1
+                            pn += 1
+                            if consecutive_failures >= 3:
+                                logger.warning("连续%d页HTTP错误, 切换session bv=%s", consecutive_failures, bv_id)
+                                break
+                            continue
+
+                        text = await pg.evaluate("() => document.body.innerText")
+                        data = json.loads(text)
+
+                        code = data.get("code")
+                        if code in (-352, -412):
+                            logger.warning("reply API code=%d pn=%d bv=%s, 切换session", code, pn, bv_id)
+                            break
+                        if code != 0:
+                            page_errors += 1
+                            pn += 1
+                            continue
+
+                        replies = data.get("data", {}).get("replies", []) or []
+                        for r in replies:
+                            comments.append({
+                                "bv_id": bv_id,
+                                "username": r.get("member", {}).get("uname", ""),
+                                "content": r.get("content", {}).get("message", ""),
+                                "like_count": r.get("like", 0),
+                                "posted_at": time.strftime(
+                                    "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
+                                ) if r.get("ctime") else "",
+                            })
+                        pn += 1
+                        session_pages += 1
+                        consecutive_failures = 0
+
+                        if progress_callback:
+                            await progress_callback(pn - 1, api_pages,
+                                f"第 {pn-1}/{api_pages} 页, 已获取 {len(comments)} 条评论")
+
+                        if len(replies) < 20:
+                            pn = api_pages + 1  # 退出外层循环
+                            break
+                    except Exception as e:
+                        logger.error("爬取评论失败 pn=%d bv_id=%s: %s", pn, bv_id, e)
+                        consecutive_failures += 1
+                        pn += 1
+                        if consecutive_failures >= 3:
+                            logger.warning("连续%d页失败, 切换session bv=%s", consecutive_failures, bv_id)
+                            break
+
+            finally:
+                await pg.close()
+
+        # session 轮换
+        if session_pages >= max_session_pages and pn <= api_pages:
+            logger.info("评论 session 已请求 %d 页, 主动轮换 (下一页: %d/%d) bv=%s",
+                        session_pages, pn, api_pages, bv_id)
+            max_session_pages = _session_comment_limit(api_pages - pn + 1)
 
     return comments, api_pages
+
