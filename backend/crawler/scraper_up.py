@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -275,7 +275,7 @@ async def scrape_up_videos(
     # ================================================================
     # Phase 1: 第 1 页 — 获取 total_count 和首页视频
     # ================================================================
-    async with browser_pool.acquire_headful_context() as ctx:
+    async with browser_pool.acquire_headful_context(rotate=False) as ctx:
         mixin_key = await _init_session(ctx, uid)
         if not mixin_key:
             errors.append("WBI密钥失败")
@@ -317,6 +317,7 @@ async def scrape_up_videos(
         logger.info("第 1 页获取 %d 条 uid=%s (已有 %d 共 %d 条 %d 页)",
                     len(videos), uid, existing_count, total_count, total_pages)
         await _save_page(videos[:])
+        await report_page_and_rotate()  # 全局统一轮换
         # 续爬时第1页只是验证, 没有新视频就不发进度, 避免闪现旧数量
         if progress_callback and (existing_count == 0 or len(videos) > 0):
             await progress_callback(1, total_pages,
@@ -360,7 +361,7 @@ async def scrape_up_videos(
             errors.append("Cookie已用尽")
             break
 
-        async with browser_pool.acquire_headful_context() as ctx:
+        async with browser_pool.acquire_headful_context(rotate=False) as ctx:
             mixin_key = await _init_session(ctx, uid)
             if not mixin_key:
                 session_init_failures += 1
@@ -441,6 +442,7 @@ async def scrape_up_videos(
                         current_pn += 1
                         session_pages += 1
                         consecutive_failures = 0
+                        await report_page_and_rotate()  # 全局统一轮换
                     elif ratelimited:
                         logger.warning("第 %d 页风控, 切换 session (当前 session 已请求 %d 页)",
                                        current_pn, session_pages)
@@ -460,6 +462,7 @@ async def scrape_up_videos(
                             current_pn += 1
                             session_pages += 1
                             consecutive_failures = 0
+                            await report_page_and_rotate()  # 全局统一轮换
                             logger.info("第 %d 页重试成功", current_pn - 1)
                         else:
                             page_errors += 1
