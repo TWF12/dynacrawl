@@ -148,15 +148,22 @@ async def scrape_video_comments(
         async with browser_pool.acquire_headful_context() as ctx:
             pg = await ctx.new_page()
             try:
-                # 获取 WBI 签名密钥
+                # 获取 WBI 签名密钥 (新 context 首次导航可能慢)
+                await pg.wait_for_timeout(2000)
                 mixin_key = None
-                try:
-                    resp = await pg.goto("https://www.bilibili.com/", timeout=20000, wait_until="domcontentloaded")
-                    if resp and resp.ok:
-                        await pg.wait_for_timeout(500)
-                        mixin_key = await get_mixin_key(pg)
-                except Exception:
-                    pass
+                for key_attempt in range(2):
+                    try:
+                        resp = await pg.goto("https://www.bilibili.com/", timeout=30000, wait_until="domcontentloaded")
+                        if resp and resp.ok:
+                            await pg.wait_for_timeout(500)
+                            mixin_key = await get_mixin_key(pg)
+                            if mixin_key:
+                                break
+                    except Exception:
+                        await pg.wait_for_timeout(2000)
+                if not mixin_key:
+                    logger.warning("mixin_key 获取失败 bv=%s", bv_id)
+                    break
 
                 while session_pages < max_session_pages and pn <= api_pages:
                     if pn > 1 or session_pages > 0:
@@ -176,7 +183,6 @@ async def scrape_video_comments(
                             consecutive_failures += 1
                             pn += 1
                             if consecutive_failures >= 3:
-                                logger.warning("连续%d页HTTP错误, 切换session bv=%s", consecutive_failures, bv_id)
                                 break
                             continue
 
