@@ -174,6 +174,7 @@ async def scrape_video_comments(
                             break
 
                         replies = data.get("data", {}).get("replies", []) or []
+                        cursor = data.get("data", {}).get("cursor", {})
                         for r in replies:
                             comments.append({
                                 "bv_id": bv_id,
@@ -184,7 +185,7 @@ async def scrape_video_comments(
                                     "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
                                 ) if r.get("ctime") else "",
                             })
-                        if len(replies) < 100:
+                        if cursor.get("is_end") or len(replies) < 20:
                             pn = api_pages + 1
                             break
 
