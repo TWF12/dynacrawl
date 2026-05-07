@@ -79,22 +79,65 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
         else:
             errors.append("WBI密钥失败")
 
-        # 3. API 都失败 → 加载 /upload/video 从 sidebar DOM 提取
-        # 用 domcontentloaded 而非 networkidle, B站页面持续网络请求永不 idle
+        # 3. API 都失败 → 空间页 DOM 提取 (昵称/头像/粉丝/视频数)
         try:
-            upload_url = f"https://space.bilibili.com/{uid}/upload/video"
-            resp = await page.goto(upload_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            space_url = f"https://space.bilibili.com/{uid}"
+            resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             if resp and resp.ok:
-                await page.wait_for_timeout(3000)
-                dom_count = await _get_video_count_from_page(page, uid)
-                if dom_count:
-                    result["video_count"] = dom_count
+                await page.wait_for_timeout(2000)
+                dom = await page.evaluate("""
+                    function() {
+                        var r = {};
+                        var s = window.__INITIAL_STATE__;
+                        if (s && s.card) {
+                            r.nickname = s.card.name || '';
+                            r.avatar_url = s.card.face || '';
+                            r.follower_count = parseInt(s.card.fans) || 0;
+                        }
+                        if (!r.nickname) {
+                            var nameEl = document.querySelector('#h-name, .h-name, .name');
+                            if (nameEl) r.nickname = nameEl.textContent.trim();
+                        }
+                        if (!r.avatar_url) {
+                            var avaEl = document.querySelector('#h-avatar img, .h-avatar img, .avatar img');
+                            if (avaEl) r.avatar_url = avaEl.src || '';
+                        }
+                        if (!r.follower_count) {
+                            var fansEl = document.querySelector('.h-fans .count, .fans-count, [class*=fans] .count');
+                            if (fansEl) r.follower_count = parseInt(fansEl.textContent.replace(/[^0-9.]/g,'')) || 0;
+                        }
+                        // 视频数从侧边栏
+                        var sideBar = document.querySelector('#submit-video-type-filter, .n-video .num, .video .num');
+                        if (sideBar) {
+                            r.video_count = parseInt(sideBar.textContent.replace(/[^0-9]/g,'')) || 0;
+                        }
+                        if (!r.video_count) {
+                            var statEls = document.querySelectorAll('.n-statistics .item .num, .statistics-item .count');
+                            for (var i=0; i<statEls.length; i++) {
+                                var txt = statEls[i].textContent.trim();
+                                var num = parseInt(txt.replace(/[^0-9.]/g,'')) || 0;
+                                if (num > 100) { r.video_count = num; break; }
+                            }
+                        }
+                        return r;
+                    }
+                """)
+                if dom:
+                    if dom.get("nickname"): result["nickname"] = dom["nickname"]
+                    if dom.get("avatar_url"): result["avatar_url"] = dom["avatar_url"]
+                    if dom.get("follower_count"): result["follower_count"] = dom["follower_count"]
+                    if dom.get("video_count") and not result.get("video_count"):
+                        result["video_count"] = dom["video_count"]
+                    if dom.get("nickname") or dom.get("video_count"):
+                        errors.append("DOM提取")
+                    else:
+                        errors.append("空间页无数据")
                 else:
-                    errors.append("sidebar无数据")
+                    errors.append("空间页无数据")
             else:
-                errors.append("投稿页失败")
+                errors.append("空间页失败")
         except Exception:
-            errors.append("投稿页超时")
+            errors.append("空间页超时")
 
     except Exception as e:
         logger.error(f"爬取UP信息失败 uid={uid}: {e}")
