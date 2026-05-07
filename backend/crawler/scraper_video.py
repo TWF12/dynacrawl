@@ -100,7 +100,7 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
 
 async def scrape_video_comments(
     page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0,
-    max_pages: int = 50, progress_callback=None,
+    max_pages: int = 20, progress_callback=None,
 ) -> tuple[list[dict], int]:
     """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
     comments = []
@@ -125,7 +125,7 @@ async def scrape_video_comments(
         logger.warning("无法获取 aid, 跳过评论采集 bv_id=%s", bv_id)
         return comments, 0
 
-    api_pages = min(max_pages, max(1, (comment_count + 19) // 20))
+    api_pages = min(max_pages, max(1, (comment_count + 49) // 50))
 
     # 直连 (reply API 不需要代理, 代理 IP 反而被 B站 标记)
     async with browser_pool.acquire_headful_context(use_proxy=False) as ctx:
@@ -151,7 +151,7 @@ async def scrape_video_comments(
                     await pg.wait_for_timeout(int(delay * 1000))
 
                 try:
-                    params = {"oid": str(aid), "type": "1", "ps": "20", "pn": str(pn), "sort": "2"}
+                    params = {"oid": str(aid), "type": "1", "ps": "50", "pn": str(pn), "sort": "2"}
                     if mixin_key:
                         params = sign_params(params, mixin_key)
                     reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
