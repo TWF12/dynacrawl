@@ -126,7 +126,7 @@ async def scrape_video_comments(
         return comments, 0
 
     api_pages = min(max_pages, max(1, (comment_count + 99) // 100))
-    SESSION_PAGES = 5  # 每 5 页轮换 context (换 IP + cookie), 防风控
+    SESSION_PAGES = 5  # 每 5 页轮换 context (换 IP + cookie)
 
     pn = 1
     while pn <= api_pages:
@@ -135,7 +135,6 @@ async def scrape_video_comments(
         async with browser_pool.acquire_headful_context() as ctx:
             pg = await ctx.new_page()
             try:
-                # 获取 WBI 签名密钥
                 await pg.wait_for_timeout(2000)
                 mixin_key = None
                 for _ in range(2):
@@ -168,13 +167,12 @@ async def scrape_video_comments(
 
                         code = data.get("code")
                         if code in (-352, -412):
-                            logger.warning("reply API code=%d pn=%d bv=%s", code, _pn, bv_id)
                             continue
                         if code != 0:
+                            pn = api_pages + 1
                             break
 
                         replies = data.get("data", {}).get("replies", []) or []
-                        cursor = data.get("data", {}).get("cursor", {})
                         for r in replies:
                             comments.append({
                                 "bv_id": bv_id,
@@ -185,7 +183,8 @@ async def scrape_video_comments(
                                     "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
                                 ) if r.get("ctime") else "",
                             })
-                        if cursor.get("is_end") or len(replies) < 20:
+                        # 最后一页不到 50 条说明到底了
+                        if len(replies) < 50:
                             pn = api_pages + 1
                             break
 
