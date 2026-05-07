@@ -173,7 +173,7 @@ async def _auto_detect_group() -> str | None:
 
 
 async def _rotate_clash_proxy() -> str | None:
-    """通过 Clash API 切换代理组节点，返回新节点名"""
+    """通过 Clash API 切换代理组节点，返回新节点名。首次调用不切换，先记录当前节点。"""
     global _last_clash_node
     async with _clash_lock:
         try:
@@ -186,6 +186,18 @@ async def _rotate_clash_proxy() -> str | None:
             path = f"/proxies/{encoded_group}"
             data = await asyncio.to_thread(_clash_get, path)
             all_nodes = data.get("all", [])
+            now = data.get("now", "")
+
+            # 首次调用: 记录当前节点, 不切换 (保留用户配置的好节点)
+            if _last_clash_node is None:
+                _last_clash_node = now
+                try:
+                    exit_ip = await asyncio.to_thread(_clash_exit_ip)
+                except Exception:
+                    exit_ip = "?"
+                _safe_log("Clash 初始节点: %s  IP:%s", now, exit_ip)
+                return now
+
             if len(all_nodes) <= 1:
                 return None
             candidates = [n for n in all_nodes if n != _last_clash_node]
@@ -201,7 +213,7 @@ async def _rotate_clash_proxy() -> str | None:
                 exit_ip = await asyncio.to_thread(_clash_exit_ip)
             except Exception:
                 pass
-            _safe_log("Clash 切换: %s -> %s  IP:%s", old_node or "初始", chosen, exit_ip)
+            _safe_log("Clash 切换: %s -> %s  IP:%s", old_node, chosen, exit_ip)
             return chosen
         except Exception as e:
             logger.debug("Clash 切换失败: %s", e)
