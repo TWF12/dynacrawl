@@ -32,7 +32,11 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
     try:
         # Tier 1: B站 view API
         api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv_id}"
-        data = await _fetch_json(page, api_url)
+        resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        data = None
+        if resp and resp.ok:
+            text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(text)
 
         if data:
             code = data.get("code")
@@ -54,24 +58,7 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
                 })
                 return result
             elif code in (-352, -412):
-                data = await _handle_rate_limit(page, api_url, "https://www.bilibili.com/", code)
-                if data and data.get("code") == 0 and data.get("data"):
-                    v = data["data"]
-                    stat = v.get("stat", {})
-                    owner = v.get("owner", {})
-                    result.update({
-                        "title": v.get("title", ""),
-                        "play_count": stat.get("view", 0),
-                        "like_count": stat.get("like", 0),
-                        "coin_count": stat.get("coin", 0),
-                        "danmaku_count": stat.get("danmaku", 0),
-                        "comment_count": stat.get("reply", 0),
-                        "uid": owner.get("mid", ""),
-                        "author": owner.get("name", ""),
-                        "aid": v.get("aid"),
-                        "raw_data": v,
-                    })
-                    return result
+                logger.warning("view API code=%d bv=%s", code, bv_id)
 
         # Tier 2: 页面 DOM 降级
         logger.warning("API获取视频信息失败，尝试从页面提取 bv_id=%s", bv_id)
