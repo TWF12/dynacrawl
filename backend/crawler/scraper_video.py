@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay
+from backend.crawler.anti_detect import random_delay, report_page_and_rotate
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
 
@@ -190,6 +190,9 @@ async def scrape_video_comments(
                         if len(replies) < 50:
                             pn = api_pages + 1
                             break
+
+                        # 全局统一轮换: 每页成功后计数, 达阈值时自动换 IP
+                        await report_page_and_rotate()
 
                         if progress_callback:
                             await progress_callback(_pn, api_pages,

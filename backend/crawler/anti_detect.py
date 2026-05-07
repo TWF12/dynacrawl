@@ -114,6 +114,21 @@ CLASH_GROUP = os.environ.get("CLASH_GROUP", "")
 _last_clash_node = None
 _clash_lock = asyncio.Lock()
 
+# 全局统一轮换: 所有任务共享 IP, 按总页数阈值触发
+_total_proxy_pages = 0
+_PROXY_ROTATE_THRESHOLD = 10  # 每 10 页换一次 IP
+
+
+async def report_page_and_rotate() -> int:
+    """每成功爬完一页调用, 累计达到阈值时自动轮换代理。返回总页数"""
+    global _total_proxy_pages
+    async with _clash_lock:
+        _total_proxy_pages += 1
+        if _total_proxy_pages >= _PROXY_ROTATE_THRESHOLD:
+            _total_proxy_pages = 0
+            await _rotate_clash_proxy()
+    return _total_proxy_pages
+
 
 def _safe_log(msg: str, *args):
     """Windows GBK 兼容的日志输出"""

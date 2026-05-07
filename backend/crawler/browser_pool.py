@@ -72,11 +72,11 @@ class BrowserPool:
                 await context.close()
 
     @asynccontextmanager
-    async def acquire_headful_context(self):
-        """获取头有浏览器 context（可建多个 page 用于并发），已加载登录 cookie"""
+    async def acquire_headful_context(self, rotate: bool = False):
+        """获取头有浏览器 context（可建多个 page 用于并发），rotate=False 时不轮换IP"""
         async with self._semaphore:
             await self._ensure_headful_browser()
-            context = await self._new_headful_context()
+            context = await self._new_headful_context(rotate=rotate)
             self._headful_contexts.append(context)
             try:
                 yield context
