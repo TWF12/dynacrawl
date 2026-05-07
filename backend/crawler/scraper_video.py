@@ -126,68 +126,76 @@ async def scrape_video_comments(
         return comments, 0
 
     api_pages = min(max_pages, max(1, (comment_count + 99) // 100))
+    SESSION_PAGES = 5  # 每 5 页轮换 context (换 IP + cookie), 防风控
 
-    async with browser_pool.acquire_headful_context() as ctx:
-        pg = await ctx.new_page()
-        try:
-            # 获取 WBI 签名密钥
-            await pg.wait_for_timeout(2000)
-            mixin_key = None
-            for _ in range(2):
-                try:
-                    resp = await pg.goto("https://www.bilibili.com/", timeout=30000, wait_until="domcontentloaded")
-                    if resp and resp.ok:
-                        await pg.wait_for_timeout(500)
-                        mixin_key = await get_mixin_key(pg)
+    pn = 1
+    while pn <= api_pages:
+        session_end = min(pn + SESSION_PAGES, api_pages + 1)
+
+        async with browser_pool.acquire_headful_context() as ctx:
+            pg = await ctx.new_page()
+            try:
+                # 获取 WBI 签名密钥
+                await pg.wait_for_timeout(2000)
+                mixin_key = None
+                for _ in range(2):
+                    try:
+                        resp = await pg.goto("https://www.bilibili.com/", timeout=30000, wait_until="domcontentloaded")
+                        if resp and resp.ok:
+                            await pg.wait_for_timeout(500)
+                            mixin_key = await get_mixin_key(pg)
+                            if mixin_key:
+                                break
+                    except Exception:
+                        await pg.wait_for_timeout(2000)
+
+                for _pn in range(pn, session_end):
+                    if _pn > 1:
+                        delay = _comment_delay(_pn, api_pages)
+                        await pg.wait_for_timeout(int(delay * 1000))
+
+                    try:
+                        params = {"oid": str(aid), "type": "1", "ps": "100", "pn": str(_pn), "sort": "2"}
                         if mixin_key:
+                            params = sign_params(params, mixin_key)
+                        reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
+
+                        resp = await pg.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                        if not resp or not resp.ok:
+                            continue
+                        text = await pg.evaluate("() => document.body.innerText")
+                        data = json.loads(text)
+
+                        code = data.get("code")
+                        if code in (-352, -412):
+                            logger.warning("reply API code=%d pn=%d bv=%s", code, _pn, bv_id)
+                            continue
+                        if code != 0:
                             break
-                except Exception:
-                    await pg.wait_for_timeout(2000)
 
-            for pn in range(1, api_pages + 1):
-                if pn > 1:
-                    delay = _comment_delay(pn, api_pages)
-                    await pg.wait_for_timeout(int(delay * 1000))
+                        replies = data.get("data", {}).get("replies", []) or []
+                        for r in replies:
+                            comments.append({
+                                "bv_id": bv_id,
+                                "username": r.get("member", {}).get("uname", ""),
+                                "content": r.get("content", {}).get("message", ""),
+                                "like_count": r.get("like", 0),
+                                "posted_at": time.strftime(
+                                    "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
+                                ) if r.get("ctime") else "",
+                            })
+                        if len(replies) < 100:
+                            pn = api_pages + 1
+                            break
 
-                try:
-                    params = {"oid": str(aid), "type": "1", "ps": "100", "pn": str(pn), "sort": "2"}
-                    if mixin_key:
-                        params = sign_params(params, mixin_key)
-                    reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
+                        if progress_callback:
+                            await progress_callback(_pn, api_pages,
+                                f"第 {_pn}/{api_pages} 页, 已获取 {len(comments)} 条评论")
+                    except Exception as e:
+                        logger.error("爬取评论失败 pn=%d bv_id=%s: %s", _pn, bv_id, e)
+            finally:
+                await pg.close()
 
-                    resp = await pg.goto(reply_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-                    if not resp or not resp.ok:
-                        continue
-                    text = await pg.evaluate("() => document.body.innerText")
-                    data = json.loads(text)
-
-                    code = data.get("code")
-                    if code in (-352, -412):
-                        logger.warning("reply API code=%d pn=%d bv=%s", code, pn, bv_id)
-                        continue
-                    if code != 0:
-                        break
-
-                    replies = data.get("data", {}).get("replies", []) or []
-                    for r in replies:
-                        comments.append({
-                            "bv_id": bv_id,
-                            "username": r.get("member", {}).get("uname", ""),
-                            "content": r.get("content", {}).get("message", ""),
-                            "like_count": r.get("like", 0),
-                            "posted_at": time.strftime(
-                                "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
-                            ) if r.get("ctime") else "",
-                        })
-                    if len(replies) < 20:
-                        break
-
-                    if progress_callback:
-                        await progress_callback(pn, api_pages,
-                            f"第 {pn}/{api_pages} 页, 已获取 {len(comments)} 条评论")
-                except Exception as e:
-                    logger.error("爬取评论失败 pn=%d bv_id=%s: %s", pn, bv_id, e)
-        finally:
-            await pg.close()
+        pn = session_end
 
     return comments, api_pages
