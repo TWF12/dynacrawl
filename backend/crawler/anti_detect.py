@@ -203,8 +203,15 @@ async def _rotate_clash_proxy() -> str | None:
             all_nodes = data.get("all", [])
             now = data.get("now", "")
 
-            # 首次调用: 记录当前节点, 不切换 (保留用户配置的好节点)
+            # 首次调用: 记录当前节点。如果是 REJECT/DIRECT 则立即换掉
             if _last_clash_node is None:
+                if now in ("REJECT", "DIRECT") and len(all_nodes) > 2:
+                    candidates = [n for n in all_nodes if n not in ("REJECT", "DIRECT")]
+                    chosen = random.choice(candidates)
+                    await asyncio.to_thread(_clash_put, path, {"name": chosen})
+                    _last_clash_node = chosen
+                    _safe_log("Clash 初始节点坏(%s), 自动切换: %s", now, chosen)
+                    return chosen
                 _last_clash_node = now
                 try:
                     exit_ip = await asyncio.to_thread(_clash_exit_ip)
@@ -215,7 +222,7 @@ async def _rotate_clash_proxy() -> str | None:
 
             if len(all_nodes) <= 1:
                 return None
-            candidates = [n for n in all_nodes if n != _last_clash_node]
+            candidates = [n for n in all_nodes if n != _last_clash_node and n not in ("REJECT", "DIRECT")]
             if not candidates:
                 candidates = all_nodes
             chosen = random.choice(candidates)
