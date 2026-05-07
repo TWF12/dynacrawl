@@ -148,6 +148,10 @@ async def scrape_video_comments(
                     except Exception:
                         await pg.wait_for_timeout(2000)
 
+                if not mixin_key:
+                    logger.warning("mixin_key 获取失败 bv=%s, 换代理重试", bv_id)
+                    continue  # 跳出此 session, 外层 while 创建新 context (换 IP + cookie)
+
                 for _pn in range(pn, session_end):
                     if _pn > 1:
                         delay = _comment_delay(_pn, api_pages)
@@ -169,8 +173,7 @@ async def scrape_video_comments(
                         if code in (-352, -412):
                             continue
                         if code != 0:
-                            pn = api_pages + 1
-                            break
+                            break  # 换 session 重试 (新 IP + cookie)
 
                         replies = data.get("data", {}).get("replies", []) or []
                         for r in replies:
