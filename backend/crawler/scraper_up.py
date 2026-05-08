@@ -34,10 +34,12 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     return await page.evaluate("""
         function() {
             var r = {};
+            // 1. 昵称: 从页面标题提取 "{name}的个人空间..."
             var title = document.title || '';
             var m = title.match(/^(.+?)的个人空间/);
             if (m) r.nickname = m[1];
 
+            // 2. 头像: 从空间页头像区图片
             var avatarImg = document.querySelector('#h-avatar img, .h-avatar img, .bili-avatar img, [class*=avatar] img');
             if (!avatarImg) {
                 var imgs = document.querySelectorAll('img');
@@ -50,55 +52,57 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
             }
             if (avatarImg) r.avatar_url = avatarImg.getAttribute('src') || avatarImg.getAttribute('data-src') || '';
 
-            // 粉丝数: 优先从导航栏精准提取
+            // 3. 粉丝数: 优先从导航栏精准提取, 降级到全页扫描
+            var elems = document.querySelectorAll('span, div, a');
             var bestFans = 0;
+            // 优先: 导航栏 "关注28粉丝2374.0万"
             var navBar = document.querySelector('.nav-bar.space-navbar, .nav-bar__main');
             if (navBar) {
-                var fm = navBar.textContent.match(/粉丝[^\d]*([\d.]+)\s*万?/);
-                if (fm) {
-                    var n = parseFloat(fm[1].replace(/[^\d.]/g, ''));
-                    if (navBar.textContent.indexOf('万')>=0) n = Math.round(n * 10000);
-                    bestFans = Math.round(n);
+                var fm0 = navBar.textContent.match(/粉丝[^\\d]*([\\d.]+)\\s*万?/);
+                if (fm0) {
+                    var n0 = parseFloat(fm0[1].replace(/[^\\d.]/g, ''));
+                    if (navBar.textContent.indexOf('万')>=0) n0 = Math.round(n0 * 10000);
+                    bestFans = Math.round(n0);
                 }
             }
-            if (!bestFans) {
-                var elems = document.querySelectorAll('span, div, a');
-                for (var i=0; i<elems.length; i++) {
-                    var txt = (elems[i].textContent || '').trim();
-                    if (txt.length > 50 || txt.length < 4) continue;
-                    var fm2 = txt.match(/粉丝[^\d]*([\d.]+)\s*万?/);
-                    if (fm2) {
-                        var n2 = parseFloat(fm2[1].replace(/[^\d.]/g, ''));
-                        if (txt.indexOf('万')>=0) n2 = Math.round(n2 * 10000);
-                        if (n2 > bestFans) bestFans = Math.round(n2);
-                    }
+            // 降级: 全页扫描
+            if (!bestFans) for (var i=0; i<elems.length; i++) {
+                var txt = (elems[i].textContent || '').trim();
+                if (txt.length > 50 || txt.length < 4) continue;
+                // 格式: \"粉丝835.4万\" 或 \"粉丝 2374.0万\" (标签和数字可能在不同子元素)
+                var fm = txt.match(/粉丝[^\\d]*([\\d.]+)\\s*万?/);
+                if (fm) {
+                    var n = parseFloat(fm[1].replace(/[^\\d.]/g, ''));
+                    if (txt.indexOf('万')>=0 || fm[0].indexOf('万')>=0) n = Math.round(n * 10000);
+                    if (n > bestFans) bestFans = Math.round(n);
                 }
             }
             if (bestFans > 0) r.follower_count = bestFans;
 
-            // 视频数: 优先导航栏 "投稿999" + section header "视频·9938"
+            // 4. 视频数: 优先导航栏/section header, 降级全页扫描
             var bestVids = 0;
+            // 优先: 导航栏 "投稿999+"
             if (navBar) {
-                var vm = navBar.textContent.match(/投稿[^\d]*([\d]+)/);
-                if (vm) { var nv = parseInt(vm[1]); if (nv > bestVids) bestVids = nv; }
+                var vm0 = navBar.textContent.match(/投稿[^\\d]*([\\d]+)/);
+                if (vm0) { var nv0 = parseInt(vm0[1]); if (nv0 > bestVids) bestVids = nv0; }
             }
-            var secHeader = document.querySelector('.section-wrap__header, [class*=section]');
-            if (secHeader) {
-                var vm2 = secHeader.textContent.match(/视频[^\d]*([\d]+)/);
-                if (!vm2) vm2 = secHeader.textContent.match(/投稿[^\d]*([\d]+)/);
-                if (vm2) { var nv2 = parseInt(vm2[1]); if (nv2 > bestVids) bestVids = nv2; }
+            // 优先: section header "视频·9938"
+            var secHdr = document.querySelector('.section-wrap__header');
+            if (secHdr) {
+                var vm1 = secHdr.textContent.match(/视频[^\\d]*([\\d]+)/);
+                if (vm1) { var nv1 = parseInt(vm1[1]); if (nv1 > bestVids) bestVids = nv1; }
             }
-            if (!bestVids) {
-                var elems2 = document.querySelectorAll('span, div, a');
-                for (var j=0; j<elems2.length; j++) {
-                    var text = (elems2[j].textContent || '').trim();
-                    if (text.length > 80 || text.length < 4) continue;
-                    var vm3 = text.match(/视频[^\d]*([\d]{3,7})/);
-                    if (!vm3) vm3 = text.match(/投稿[^\d]*([\d]{3,7})/);
-                    if (vm3) {
-                        var nv3 = parseInt(vm3[1].replace(/[^\d]/g, ''));
-                        if (!isNaN(nv3) && nv3 > bestVids && nv3 < 9999999) bestVids = nv3;
-                    }
+            // 降级: 全页扫描
+            if (!bestVids) for (var j=0; j<elems.length; j++) {
+                var text = (elems[j].textContent || '').trim();
+                if (text.length > 80 || text.length < 4) continue;
+                // 匹配 \"视频\" + 任意分隔符 + 3-7位数字
+                var vm = text.match(/视频\W{0,3}?(\d{3,7})/);
+                // 匹配 \"投稿\" + 任意分隔符 + 3-7位数字
+                if (!vm) vm = text.match(/投稿\W{0,3}?(\d{3,7})/);
+                if (vm) {
+                    var n2 = parseInt(vm[1].replace(/[^\\d]/g, ''));
+                    if (!isNaN(n2) && n2 > bestVids && n2 < 9999999) bestVids = n2;
                 }
             }
             if (bestVids > 0) r.video_count = bestVids;
@@ -107,6 +111,111 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     """)
 
 
+async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
+    """爬取 UP 主基本信息 + 多途径获取真实视频总数。API 故障时直连 DOM 兜底"""
+    result = {"uid": uid, "video_count": 0}
+    errors = []
+    api_failed = False
+    await random_delay()
+
+    # Phase 1: card API (无需 WBI, 轻量)
+    try:
+        await page.goto("https://www.bilibili.com/", timeout=15000, wait_until="domcontentloaded")
+        await random_delay()
+        card_url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
+        response = await page.goto(card_url, timeout=15000, wait_until="domcontentloaded")
+        if response and response.ok:
+            body_text = await page.evaluate("() => document.body.innerText")
+            data = json.loads(body_text)
+            if data.get("code") == 0:
+                card = data.get("data", {}).get("card", {})
+                result["nickname"] = card.get("name", "")
+                result["avatar_url"] = card.get("face", "")
+                result["follower_count"] = card.get("fans", 0)
+                result["raw_data"] = card
+                ac = card.get("archive_count", 0)
+                if ac and isinstance(ac, int) and ac > 0:
+                    result["video_count"] = ac
+                    result["errors"] = errors
+                    result["status"] = _pick_status(errors, True)
+                    return result
+            else:
+                errors.append("card异常")
+        else:
+            errors.append("card失败")
+    except Exception:
+        errors.append("card超时")
+        api_failed = True
+
+    # Phase 2: arc/search (需要 WBI)
+    if not result.get("video_count"):
+        try:
+            mixin_key = await get_mixin_key(page)
+            if mixin_key:
+                params = sign_params({
+                    "mid": uid, "ps": "1", "pn": "1",
+                    "tid": "0", "keyword": "", "order": "pubdate",
+                }, mixin_key)
+                api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
+                resp = await page.goto(api_url, timeout=15000, wait_until="domcontentloaded")
+                if resp and resp.ok:
+                    body_text = await page.evaluate("() => document.body.innerText")
+                    data = json.loads(body_text)
+                    if data.get("code") == 0:
+                        total = data.get("data", {}).get("page", {}).get("count", 0)
+                        if total:
+                            result["video_count"] = total
+                            result["errors"] = errors
+                            result["status"] = _pick_status(errors, True)
+                            return result
+                    else:
+                        errors.append("arc/search异常")
+                else:
+                    errors.append("arc/search失败")
+            else:
+                errors.append("WBI密钥失败")
+        except Exception:
+            errors.append("arc/search超时")
+            api_failed = True
+
+    # Phase 3: DOM 提取 — API 故障时用 headful 直连, 否则用当前 page
+    try:
+        dom = None
+        if api_failed:
+            logger.info("API 故障 uid=%s, 直连 headful DOM 提取", uid)
+            direct_ctx, direct_pg = await _make_direct_page()
+            try:
+                dom = await _dom_extract_up_info(direct_pg, uid)
+            finally:
+                await direct_pg.close()
+                await direct_ctx.close()
+        else:
+            dom = await _dom_extract_up_info(page, uid)
+
+        if dom:
+            if dom.get("nickname"): result["nickname"] = dom["nickname"]
+            if dom.get("avatar_url"): result["avatar_url"] = dom["avatar_url"]
+            if dom.get("follower_count"): result["follower_count"] = dom["follower_count"]
+            if dom.get("video_count") and not result.get("video_count"):
+                result["video_count"] = dom["video_count"]
+            if dom.get("nickname") or dom.get("video_count"):
+                errors.append("DOM提取")
+            else:
+                errors.append("空间页无数据")
+        else:
+            errors.append("空间页无数据")
+    except Exception as e:
+        logger.warning("DOM 兜底失败 uid=%s: %s", uid, e)
+        errors.append("DOM兜底失败")
+
+    result["errors"] = errors
+    result["status"] = _pick_status(errors, len(result) > 1)
+    return result
+
+
+# ============================================================
+# DOM 兜底提取
+# ============================================================
 
 async def _dom_extract(page: Page, uid: str, seen_bvids: set) -> list[dict]:
     """从当前页面 DOM 提取所有可见的视频卡片"""
