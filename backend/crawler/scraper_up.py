@@ -27,10 +27,6 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
         await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         await random_delay()
 
-        await page.set_extra_http_headers({
-            "Referer": "https://www.bilibili.com/",
-            "Origin": "https://www.bilibili.com",
-        })
         card_url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
         response = await page.goto(card_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if response and response.ok:
@@ -58,10 +54,6 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 "mid": uid, "ps": "1", "pn": "1",
                 "tid": "0", "keyword": "", "order": "pubdate",
             }, mixin_key)
-            await page.set_extra_http_headers({
-                "Referer": f"https://space.bilibili.com/{uid}",
-                "Origin": "https://space.bilibili.com",
-            })
             api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
             resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
             if resp and resp.ok:
@@ -205,46 +197,51 @@ async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
     return after - before
 
 
-async def _dom_fallback(uid: str, seen_bvids: set, page1,
-                       progress_callback=None) -> tuple[list[dict], int]:
-    """多页面试探 DOM 兜底提取视频，返回 (videos, total_count)"""
-    all_videos = []
+async def _dom_fallback(uid: str, seen_bvids: set, page,
+                       progress_callback=None, start_pn: int = 1,
+                       max_pages: int = 0, task_id: str = "") -> tuple[list[dict], int]:
+    """DOM 兜底: 分页提取视频列表 (API 不可用时保底), 返回 (videos, total_count)"""
+    all_videos: list[dict] = []
     total_count = 0
+    base_url = f"https://space.bilibili.com/{uid}/video?tid=0&keyword=&order=pubdate"
 
-    urls_to_try = [
-        f"https://space.bilibili.com/{uid}/lists",
-        f"https://space.bilibili.com/{uid}/video?tid=0&pn=1&keyword=&order=pubdate",
-        f"https://space.bilibili.com/{uid}",
-    ]
+    try:
+        first_url = f"{base_url}&pn={start_pn}"
+        resp = await page.goto(first_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        if not resp or not resp.ok:
+            resp = await page.goto(f"https://space.bilibili.com/{uid}",
+                                   timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        await page.wait_for_timeout(2000)
 
-    for attempt_url in urls_to_try:
-        try:
-            await page1.goto(attempt_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            await page1.wait_for_timeout(3000)
+        total_count = await _get_video_count_from_page(page, uid)
 
-            total_count = await _get_video_count_from_page(page1, uid) or total_count
-            videos = await _dom_extract(page1, uid, seen_bvids)
-            all_videos.extend(videos)
-
-            if progress_callback:
-                await progress_callback(1, max(1, total_count or 1),
-                                        f"DOM 兜底: 已获取 {len(all_videos)}/{total_count or '?'} 条")
-
-            if all_videos:
-                for scroll_i in range(10):
-                    new_count = await _dom_scroll_for_more(page1)
-                    if new_count == 0:
-                        break
-                    await random_delay()
-                    more = await _dom_extract(page1, uid, seen_bvids)
-                    all_videos.extend(more)
-                    if progress_callback and total_count:
-                        await progress_callback(
-                            min(scroll_i + 2, max(1, total_count)), max(1, total_count),
-                            f"DOM 兜底: 已获取 {len(all_videos)}/{total_count} 条")
+        pn = start_pn
+        dom_max = max_pages or 50
+        while pn - start_pn < dom_max:
+            if task_id and is_task_cancelled(task_id):
                 break
-        except Exception:
-            continue
+
+            videos = await _dom_extract(page, uid, seen_bvids)
+            if videos:
+                all_videos.extend(videos)
+                if progress_callback:
+                    await progress_callback(
+                        pn - start_pn + 1, max(1, total_count or 1),
+                        f"DOM 兜底: 已获取 {len(all_videos)}/{total_count or '?'} 条")
+            else:
+                break
+
+            pn += 1
+            next_url = f"{base_url}&pn={pn}"
+            try:
+                resp = await page.goto(next_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                if not resp or not resp.ok:
+                    break
+                await page.wait_for_timeout(random.uniform(1000, 3000))
+            except Exception:
+                break
+    except Exception as e:
+        logger.warning("DOM 兜底异常 uid=%s: %s", uid, e)
 
     return all_videos, total_count
 
@@ -321,8 +318,23 @@ async def scrape_up_videos(
     async with browser_pool.acquire_headful_context(rotate=False) as ctx:
         mixin_key = await _init_session(ctx, uid)
         if not mixin_key:
+            logger.warning("WBI密钥失败 uid=%s, 启用 DOM 兜底", uid)
             errors.append("WBI密钥失败")
-            return {"videos": videos, "total_count": 0, "errors": errors, "status": "failed"}
+            pg_dom = await ctx.new_page()
+            try:
+                dom_videos, dom_total = await _dom_fallback(
+                    uid, seen_bvids, pg_dom, progress_callback, task_id=task_id)
+            finally:
+                await pg_dom.close()
+            for v in dom_videos:
+                videos.append(v)
+            total_count = dom_total or 0
+            if len(videos) > 0:
+                errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
+            else:
+                errors.append("API+DOM均未提取到视频")
+            return {"videos": videos, "total_count": total_count, "errors": errors,
+                    "status": _pick_status(errors, len(videos) > 0)}
 
         pg1 = await ctx.new_page()
         try:
@@ -398,10 +410,24 @@ async def scrape_up_videos(
             errors.append("任务已取消")
             break
 
-        # Cookie 全部用尽, 继续也无法正常采集
+        # Cookie 全部用尽 → DOM 兜底 (无需登录态)
         if cookie_manager.count == 0:
-            logger.error("所有 Cookie 已用尽, 无法继续采集")
+            logger.warning("所有 Cookie 已用尽, 剩余 %d 页用 DOM 兜底", total_pages - current_pn + 1)
             errors.append("Cookie已用尽")
+            # 不在 context 内, 用 headless acquire_page 做 DOM 提取
+            try:
+                async with browser_pool.acquire_page() as dom_pg:
+                    dom_videos, _ = await _dom_fallback(
+                        uid, seen_bvids, dom_pg, progress_callback,
+                        start_pn=current_pn, max_pages=total_pages - current_pn + 1,
+                        task_id=task_id)
+                for v in dom_videos:
+                    videos.append(v)
+                if dom_videos:
+                    errors.append(f"DOM续爬 {len(dom_videos)} 条")
+            except Exception as e:
+                logger.error("DOM 兜底异常: %s", e)
+                errors.append("DOM兜底失败")
             break
 
         async with browser_pool.acquire_headful_context(rotate=False) as ctx:
@@ -409,7 +435,20 @@ async def scrape_up_videos(
             if not mixin_key:
                 session_init_failures += 1
                 if session_init_failures >= 3:
+                    logger.warning("WBI密钥连续失败, 剩余 %d 页用 DOM 兜底", total_pages - current_pn + 1)
                     errors.append("WBI密钥失败(重试3次)")
+                    dom_pg = await ctx.new_page()
+                    try:
+                        dom_videos, _ = await _dom_fallback(
+                            uid, seen_bvids, dom_pg, progress_callback,
+                            start_pn=current_pn, max_pages=total_pages - current_pn + 1,
+                            task_id=task_id)
+                    finally:
+                        await dom_pg.close()
+                    for v in dom_videos:
+                        videos.append(v)
+                    if dom_videos:
+                        errors.append(f"DOM续爬 {len(dom_videos)} 条")
                     break
                 logger.warning("_init_session 失败, 等待后重试 (%d/3)", session_init_failures)
                 await asyncio.sleep(random.uniform(10, 20))
@@ -578,6 +617,10 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
         await page.set_extra_http_headers({
             "Referer": referer,
             "Origin": "https://space.bilibili.com",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
+            "Sec-Ch-UA-Platform": '"Windows"',
         })
         resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if resp and resp.ok:

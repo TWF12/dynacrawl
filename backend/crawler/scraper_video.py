@@ -10,6 +10,7 @@ from backend.config import PAGE_TIMEOUT
 from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
+from backend.crawler.cookie_manager import cookie_manager
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,18 @@ def _comment_delay(pn: int, max_pages: int) -> float:
         return random.uniform(4, 8)
 
 
-async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
+def _pick_video_status(errors: list[str], has_data: bool) -> str:
+    if not errors:
+        return "ok"
+    if has_data:
+        return "fallback"
+    return "failed"
+
+
+async def scrape_video_info(page: Page, bv_id: str) -> dict:
     """爬取视频基本信息 (API 优先, 页面降级) — headless 即可"""
-    result = {"bv_id": bv_id}
+    result: dict = {"bv_id": bv_id}
+    errors: list[str] = []
     await page.wait_for_timeout(random.randint(500, 2000))
 
     try:
@@ -56,9 +66,14 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
                     "aid": v.get("aid"),
                     "raw_data": v,
                 })
+                result["errors"] = errors
+                result["status"] = _pick_video_status(errors, True)
                 return result
             elif code in (-352, -412):
+                errors.append("view风控")
                 logger.warning("view API code=%d bv=%s", code, bv_id)
+            else:
+                errors.append("view异常")
 
         # DOM 降级
         logger.warning("API获取视频信息失败, 尝试页面提取 bv_id=%s", bv_id)
@@ -93,8 +108,15 @@ async def scrape_video_info(page: Page, bv_id: str) -> Optional[dict]:
             result["coin_count"] = stat.get("coin", 0)
             result["danmaku_count"] = stat.get("danmaku", 0)
             result["comment_count"] = stat.get("reply", 0)
+            errors.append("DOM提取")
+        else:
+            errors.append("视频页失败")
     except Exception as e:
         logger.error("爬取视频信息失败 bv_id=%s: %s", bv_id, e)
+        errors.append("超时")
+
+    result["errors"] = errors
+    result["status"] = _pick_video_status(errors, len(result) > 1)
     return result
 
 
@@ -173,6 +195,9 @@ async def scrape_video_comments(
                         code = data.get("code")
                         if code in (-352, -412):
                             continue
+                        if code in (-101, 3, -6):
+                            logger.warning("Cookie 已过期! code=%d bv=%s, 自动删除", code, bv_id)
+                            await cookie_manager.mark_invalid(pg.context)
                         if code != 0:
                             break  # 换 session 重试 (新 IP + cookie)
 

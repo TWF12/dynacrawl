@@ -172,7 +172,7 @@ async def process_url_message(
 
                 elif url_type == "video_api":
                     result = await scrape_video_info(page, msg.get("bv_id", ""))
-                    if result:
+                    if result and (result.get("title") or result.get("raw_data")):
                         session.add(VideoInfo(
                             task_id=task_id, bv_id=result.get("bv_id", ""),
                             title=result.get("title", ""),
@@ -218,7 +218,18 @@ async def process_url_message(
                     like_count=c.get("like_count"),
                     posted_at=c.get("posted_at"),
                 ))
-            result = {"comment_count": len(comments), "comment_pages": pages}
+            com_errors = []
+            com_status = "ok"
+            if comment_count and len(comments) < comment_count:
+                com_errors.append(f"评论不全: {len(comments)}/{comment_count}")
+                com_status = "fallback" if len(comments) > 0 else "failed"
+            elif len(comments) == 0 and comment_count == 0:
+                com_status = "ok"  # 视频本来就没评论
+            elif len(comments) == 0 and pages > 0:
+                com_errors.append("评论采集为空")
+                com_status = "failed"
+            result = {"comment_count": len(comments), "comment_pages": pages,
+                      "errors": com_errors, "status": com_status}
 
         # 采集期间任务可能被删除(级联删除 URL 记录), expire 后重新检查
         session.expire_all()
