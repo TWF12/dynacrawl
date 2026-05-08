@@ -26,7 +26,8 @@ async def _make_direct_page(from_page: Page = None):
 
 async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数 (适配新版 B站 无 __INITIAL_STATE__)"""
-    space_url = f"https://space.bilibili.com/{uid}"
+    # 用 /dynamic 页面 — 登录墙也保留 navBar (昵称/粉丝/投稿数)
+    space_url = f"https://space.bilibili.com/{uid}/dynamic"
     resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
@@ -310,17 +311,22 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
                 if not await _try_page(f"{base_url}&pn={pn}", random.uniform(1.5, 3)):
                     break
 
-        # 策略 2: 分页没拿到 → 空间主页 + 滚动 (重试一次)
+        # 策略 2: 分页没拿到 → 投稿页 + 空间主页 + 滚动 (重试一次)
         if not all_videos:
+            fallback_urls = [
+                f"https://space.bilibili.com/{uid}/upload/video",  # 投稿页: 登录墙下仍渲染视频列表
+                f"https://space.bilibili.com/{uid}",               # 空间主页兜底
+            ]
             for attempt in range(2):
-                logger.info("DOM 分页无数据 uid=%s, 切空间主页滚动 (attempt %d)", uid, attempt + 1)
-                ok = await _try_page(f"https://space.bilibili.com/{uid}", 4)
+                url = fallback_urls[attempt % len(fallback_urls)]
+                logger.info("DOM 分页无数据 uid=%s, 切 %s (attempt %d)", uid, url.split('/')[-1] or 'home', attempt + 1)
+                ok = await _try_page(url, 4)
                 if not ok:
-                    logger.warning("空间主页加载失败 uid=%s attempt=%d", uid, attempt + 1)
+                    logger.warning("页面加载失败 uid=%s url=%s attempt=%d", uid, url, attempt + 1)
                     await asyncio.sleep(2)
                     continue
                 total_count = await _get_video_count_from_page(page, uid) or total_count
-                logger.info("空间主页加载成功 uid=%s total=%d, 开始滚动提取", uid, total_count)
+                logger.info("页面加载成功 uid=%s total=%d, 开始滚动提取", uid, total_count)
                 await _extract_and_report(1)
                 for scroll_i in range(min(max_pages or 30, 50)):
                     before = len(all_videos)
@@ -332,7 +338,7 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
                         break
                 if all_videos:
                     break
-                logger.warning("空间主页未提取到视频 uid=%s attempt=%d, 重试", uid, attempt + 1)
+                logger.warning("页面未提取到视频 uid=%s attempt=%d, 重试", uid, attempt + 1)
                 await asyncio.sleep(2)
 
     except Exception as e:
