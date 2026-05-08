@@ -27,10 +27,10 @@ async def _make_direct_page(from_page: Page = None):
 async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数 (适配新版 B站 无 __INITIAL_STATE__)"""
     space_url = f"https://space.bilibili.com/{uid}"
-    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
+    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
     if not resp or not resp.ok:
         return {}
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(3000)
     return await page.evaluate("""
         function() {
             var r = {};
@@ -293,10 +293,10 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
             if await _try_page(f"https://space.bilibili.com/{uid}", 3):
                 total_count = await _get_video_count_from_page(page, uid) or total_count
                 await _extract_and_report(1)
-                for scroll_i in range(min(max_pages or 10, 20)):
+                for scroll_i in range(min(max_pages or 30, 50)):
                     before = len(all_videos)
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(random.randint(1500, 3000))
+                    await page.wait_for_timeout(random.randint(2000, 4000))
                     await _extract_and_report(scroll_i + 2)
                     if len(all_videos) == before:
                         break  # 没新内容
