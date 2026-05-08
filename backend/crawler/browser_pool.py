@@ -85,6 +85,23 @@ class BrowserPool:
                 cookie_manager.unregister_context(context)
                 await context.close()
 
+    @asynccontextmanager
+    async def acquire_direct_context(self):
+        """获取无代理无 cookie 的直连 context — DOM 兜底专用"""
+        async with self._semaphore:
+            await self.start()
+            ua = get_random_ua()
+            context = await self._browser.new_context(
+                user_agent=ua,
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+                # 无 proxy, 无 storage_state → 直连 + 无登录态
+            )
+            try:
+                yield context
+            finally:
+                await context.close()
+
     async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
         """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP"""
         if rotate:

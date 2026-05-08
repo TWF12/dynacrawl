@@ -306,8 +306,8 @@ async def process_url_message(
             url_record = await session.get(UrlRecord, url_id)
             if url_record:
                 new_retry = retry_count + 1
-                # 延迟重试: 前期快速, 后期递增等待, 给代理/网络恢复时间
-                _RETRY_DELAYS = [5, 30, 120, 600, 1800]  # 秒: 5s→30s→2min→10min→30min
+                # 延迟重试: 快速反馈 (DOM 兜底已覆盖多数场景, 此处仅为最终保护)
+                _RETRY_DELAYS = [5, 15, 60]  # 秒: 5s→15s→1min, 3次后放弃
                 max_auto_retry = len(_RETRY_DELAYS)
                 if new_retry <= max_auto_retry:
                     url_record.retry_count = new_retry

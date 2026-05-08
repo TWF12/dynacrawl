@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -17,18 +17,77 @@ logger = logging.getLogger(__name__)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
 
+async def _make_direct_page(from_page: Page):
+    """从现有 page 的 browser 创建无代理直连 page (绕过 pool, DOM 兜底专用)"""
+    browser = from_page.context.browser
+    ua = get_random_ua()
+    ctx = await browser.new_context(
+        user_agent=ua,
+        viewport={"width": 1920, "height": 1080},
+        locale="zh-CN",
+    )
+    pg = await ctx.new_page()
+    return ctx, pg
+
+
+async def _dom_extract_up_info(page: Page, uid: str) -> dict:
+    """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数"""
+    space_url = f"https://space.bilibili.com/{uid}"
+    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+    if not resp or not resp.ok:
+        return {}
+    await page.wait_for_timeout(2000)
+    return await page.evaluate("""
+        function() {
+            var r = {};
+            var s = window.__INITIAL_STATE__;
+            if (s && s.card) {
+                r.nickname = s.card.name || '';
+                r.avatar_url = s.card.face || '';
+                r.follower_count = parseInt(s.card.fans) || 0;
+            }
+            if (!r.nickname) {
+                var nameEl = document.querySelector('#h-name, .h-name, .name');
+                if (nameEl) r.nickname = nameEl.textContent.trim();
+            }
+            if (!r.avatar_url) {
+                var avaEl = document.querySelector('#h-avatar img, .h-avatar img, .avatar img');
+                if (avaEl) r.avatar_url = avaEl.src || '';
+            }
+            if (!r.follower_count) {
+                var fansEl = document.querySelector('.h-fans .count, .fans-count, [class*=fans] .count');
+                if (fansEl) r.follower_count = parseInt(fansEl.textContent.replace(/[^0-9.]/g,'')) || 0;
+            }
+            var sideBar = document.querySelector('#submit-video-type-filter, .n-video .num, .video .num');
+            if (sideBar) {
+                r.video_count = parseInt(sideBar.textContent.replace(/[^0-9]/g,'')) || 0;
+            }
+            if (!r.video_count) {
+                var statEls = document.querySelectorAll('.n-statistics .item .num, .statistics-item .count');
+                for (var i=0; i<statEls.length; i++) {
+                    var txt = statEls[i].textContent.trim();
+                    var num = parseInt(txt.replace(/[^0-9.]/g,'')) || 0;
+                    if (num > 100) { r.video_count = num; break; }
+                }
+            }
+            return r;
+        }
+    """)
+
+
 async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
-    """爬取 UP 主基本信息 + 多途径获取真实视频总数"""
+    """爬取 UP 主基本信息 + 多途径获取真实视频总数。API 故障时直连 DOM 兜底"""
     result = {"uid": uid, "video_count": 0}
     errors = []
+    api_failed = False
     await random_delay()
-    try:
-        # 1. card API → 基本信息 + archive_count（优先，拿到即返回）
-        await page.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-        await random_delay()
 
+    # Phase 1: card API (无需 WBI, 轻量)
+    try:
+        await page.goto("https://www.bilibili.com/", timeout=15000, wait_until="domcontentloaded")
+        await random_delay()
         card_url = f"https://api.bilibili.com/x/web-interface/card?mid={uid}"
-        response = await page.goto(card_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        response = await page.goto(card_url, timeout=15000, wait_until="domcontentloaded")
         if response and response.ok:
             body_text = await page.evaluate("() => document.body.innerText")
             data = json.loads(body_text)
@@ -41,104 +100,81 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
                 ac = card.get("archive_count", 0)
                 if ac and isinstance(ac, int) and ac > 0:
                     result["video_count"] = ac
+                    result["errors"] = errors
+                    result["status"] = _pick_status(errors, True)
                     return result
             else:
                 errors.append("card异常")
         else:
             errors.append("card失败")
+    except Exception:
+        errors.append("card超时")
+        api_failed = True
 
-        # 2. card API 没拿到 → arc/search?ps=1
-        mixin_key = await get_mixin_key(page)
-        if mixin_key:
-            params = sign_params({
-                "mid": uid, "ps": "1", "pn": "1",
-                "tid": "0", "keyword": "", "order": "pubdate",
-            }, mixin_key)
-            api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
-            resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            if resp and resp.ok:
-                body_text = await page.evaluate("() => document.body.innerText")
-                data = json.loads(body_text)
-                if data.get("code") == 0:
-                    total = data.get("data", {}).get("page", {}).get("count", 0)
-                    if total:
-                        result["video_count"] = total
-                        return result
-                else:
-                    errors.append("arc/search异常")
-            else:
-                errors.append("arc/search失败")
-        else:
-            errors.append("WBI密钥失败")
-
-        # 3. API 都失败 → 空间页 DOM 提取 (昵称/头像/粉丝/视频数)
+    # Phase 2: arc/search (需要 WBI)
+    if not result.get("video_count"):
         try:
-            space_url = f"https://space.bilibili.com/{uid}"
-            resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-            if resp and resp.ok:
-                await page.wait_for_timeout(2000)
-                dom = await page.evaluate("""
-                    function() {
-                        var r = {};
-                        var s = window.__INITIAL_STATE__;
-                        if (s && s.card) {
-                            r.nickname = s.card.name || '';
-                            r.avatar_url = s.card.face || '';
-                            r.follower_count = parseInt(s.card.fans) || 0;
-                        }
-                        if (!r.nickname) {
-                            var nameEl = document.querySelector('#h-name, .h-name, .name');
-                            if (nameEl) r.nickname = nameEl.textContent.trim();
-                        }
-                        if (!r.avatar_url) {
-                            var avaEl = document.querySelector('#h-avatar img, .h-avatar img, .avatar img');
-                            if (avaEl) r.avatar_url = avaEl.src || '';
-                        }
-                        if (!r.follower_count) {
-                            var fansEl = document.querySelector('.h-fans .count, .fans-count, [class*=fans] .count');
-                            if (fansEl) r.follower_count = parseInt(fansEl.textContent.replace(/[^0-9.]/g,'')) || 0;
-                        }
-                        // 视频数从侧边栏
-                        var sideBar = document.querySelector('#submit-video-type-filter, .n-video .num, .video .num');
-                        if (sideBar) {
-                            r.video_count = parseInt(sideBar.textContent.replace(/[^0-9]/g,'')) || 0;
-                        }
-                        if (!r.video_count) {
-                            var statEls = document.querySelectorAll('.n-statistics .item .num, .statistics-item .count');
-                            for (var i=0; i<statEls.length; i++) {
-                                var txt = statEls[i].textContent.trim();
-                                var num = parseInt(txt.replace(/[^0-9.]/g,'')) || 0;
-                                if (num > 100) { r.video_count = num; break; }
-                            }
-                        }
-                        return r;
-                    }
-                """)
-                if dom:
-                    if dom.get("nickname"): result["nickname"] = dom["nickname"]
-                    if dom.get("avatar_url"): result["avatar_url"] = dom["avatar_url"]
-                    if dom.get("follower_count"): result["follower_count"] = dom["follower_count"]
-                    if dom.get("video_count") and not result.get("video_count"):
-                        result["video_count"] = dom["video_count"]
-                    if dom.get("nickname") or dom.get("video_count"):
-                        errors.append("DOM提取")
+            mixin_key = await get_mixin_key(page)
+            if mixin_key:
+                params = sign_params({
+                    "mid": uid, "ps": "1", "pn": "1",
+                    "tid": "0", "keyword": "", "order": "pubdate",
+                }, mixin_key)
+                api_url = f"https://api.bilibili.com/x/space/wbi/arc/search?{urlencode(params)}"
+                resp = await page.goto(api_url, timeout=15000, wait_until="domcontentloaded")
+                if resp and resp.ok:
+                    body_text = await page.evaluate("() => document.body.innerText")
+                    data = json.loads(body_text)
+                    if data.get("code") == 0:
+                        total = data.get("data", {}).get("page", {}).get("count", 0)
+                        if total:
+                            result["video_count"] = total
+                            result["errors"] = errors
+                            result["status"] = _pick_status(errors, True)
+                            return result
                     else:
-                        errors.append("空间页无数据")
+                        errors.append("arc/search异常")
                 else:
-                    errors.append("空间页无数据")
+                    errors.append("arc/search失败")
             else:
-                errors.append("空间页失败")
+                errors.append("WBI密钥失败")
         except Exception:
-            errors.append("空间页超时")
+            errors.append("arc/search超时")
+            api_failed = True
 
+    # Phase 3: DOM 提取 — API 故障时用直连, 否则用当前 page
+    try:
+        dom = None
+        if api_failed:
+            # 代理疑似故障 → 直连 DOM
+            logger.info("API 故障 uid=%s, 直连 DOM 提取", uid)
+            direct_ctx, direct_pg = await _make_direct_page(page)
+            try:
+                dom = await _dom_extract_up_info(direct_pg, uid)
+            finally:
+                await direct_pg.close()
+                await direct_ctx.close()
+        else:
+            dom = await _dom_extract_up_info(page, uid)
+
+        if dom:
+            if dom.get("nickname"): result["nickname"] = dom["nickname"]
+            if dom.get("avatar_url"): result["avatar_url"] = dom["avatar_url"]
+            if dom.get("follower_count"): result["follower_count"] = dom["follower_count"]
+            if dom.get("video_count") and not result.get("video_count"):
+                result["video_count"] = dom["video_count"]
+            if dom.get("nickname") or dom.get("video_count"):
+                errors.append("DOM提取")
+            else:
+                errors.append("空间页无数据")
+        else:
+            errors.append("空间页无数据")
     except Exception as e:
-        logger.error(f"爬取UP信息失败 uid={uid}: {e}")
-        errors.append("超时")
+        logger.warning("DOM 兜底失败 uid=%s: %s", uid, e)
+        errors.append("DOM兜底失败")
 
-    if errors:
-        result["errors"] = errors
-    result["status"] = _pick_status(errors, result["video_count"] > 0)
-
+    result["errors"] = errors
+    result["status"] = _pick_status(errors, len(result) > 1)
     return result
 
 
@@ -274,10 +310,10 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
 
 
 async def _init_session(ctx, uid: str) -> str | None:
-    """为新 session 获取 mixin_key, 加载轻量首页替代投稿页"""
+    """为新 session 获取 mixin_key"""
     pg = await ctx.new_page()
     try:
-        resp = await pg.goto("https://www.bilibili.com/", timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        resp = await pg.goto("https://www.bilibili.com/", timeout=15000, wait_until="domcontentloaded")
         if not resp or not resp.ok:
             return None
         await pg.wait_for_timeout(500)
@@ -318,14 +354,20 @@ async def scrape_up_videos(
     async with browser_pool.acquire_headful_context(rotate=False) as ctx:
         mixin_key = await _init_session(ctx, uid)
         if not mixin_key:
-            logger.warning("WBI密钥失败 uid=%s, 启用 DOM 兜底", uid)
+            logger.warning("WBI密钥失败 uid=%s, 直连 DOM 兜底", uid)
             errors.append("WBI密钥失败")
-            pg_dom = await ctx.new_page()
+            direct_ctx = await ctx.browser.new_context(
+                user_agent=get_random_ua(),
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+            )
+            direct_pg = await direct_ctx.new_page()
             try:
                 dom_videos, dom_total = await _dom_fallback(
-                    uid, seen_bvids, pg_dom, progress_callback, task_id=task_id)
+                    uid, seen_bvids, direct_pg, progress_callback, task_id=task_id)
             finally:
-                await pg_dom.close()
+                await direct_pg.close()
+                await direct_ctx.close()
             for v in dom_videos:
                 videos.append(v)
             total_count = dom_total or 0
@@ -343,14 +385,20 @@ async def scrape_up_videos(
             await pg1.close()
 
         if page1_data is None:
-            # arc/search 失败 → DOM 兜底
-            logger.warning("arc/search 无响应 uid=%s，启用 DOM 兜底", uid)
-            pg_dom = await ctx.new_page()
+            # arc/search 失败 → 直连 DOM 兜底
+            logger.warning("arc/search 无响应 uid=%s，直连 DOM 兜底", uid)
+            direct_ctx = await ctx.browser.new_context(
+                user_agent=get_random_ua(),
+                viewport={"width": 1920, "height": 1080},
+                locale="zh-CN",
+            )
+            direct_pg = await direct_ctx.new_page()
             try:
                 dom_videos, dom_total = await _dom_fallback(
-                    uid, seen_bvids, pg_dom, progress_callback)
+                    uid, seen_bvids, direct_pg, progress_callback)
             finally:
-                await pg_dom.close()
+                await direct_pg.close()
+                await direct_ctx.close()
             for v in dom_videos:
                 videos.append(v)
             total_count = dom_total or 0
@@ -410,23 +458,26 @@ async def scrape_up_videos(
             errors.append("任务已取消")
             break
 
-        # Cookie 全部用尽 → DOM 兜底 (无需登录态)
+        # Cookie 全部用尽 → 直连 DOM 兜底 (无需登录态, 不走代理)
         if cookie_manager.count == 0:
-            logger.warning("所有 Cookie 已用尽, 剩余 %d 页用 DOM 兜底", total_pages - current_pn + 1)
+            logger.warning("所有 Cookie 已用尽, 剩余 %d 页用直连 DOM 兜底", total_pages - current_pn + 1)
             errors.append("Cookie已用尽")
-            # 不在 context 内, 用 headless acquire_page 做 DOM 提取
             try:
-                async with browser_pool.acquire_page() as dom_pg:
-                    dom_videos, _ = await _dom_fallback(
-                        uid, seen_bvids, dom_pg, progress_callback,
-                        start_pn=current_pn, max_pages=total_pages - current_pn + 1,
-                        task_id=task_id)
+                async with browser_pool.acquire_direct_context() as direct_ctx:
+                    direct_pg = await direct_ctx.new_page()
+                    try:
+                        dom_videos, _ = await _dom_fallback(
+                            uid, seen_bvids, direct_pg, progress_callback,
+                            start_pn=current_pn, max_pages=total_pages - current_pn + 1,
+                            task_id=task_id)
+                    finally:
+                        await direct_pg.close()
                 for v in dom_videos:
                     videos.append(v)
                 if dom_videos:
                     errors.append(f"DOM续爬 {len(dom_videos)} 条")
             except Exception as e:
-                logger.error("DOM 兜底异常: %s", e)
+                logger.error("直连 DOM 兜底异常: %s", e)
                 errors.append("DOM兜底失败")
             break
 
@@ -435,16 +486,22 @@ async def scrape_up_videos(
             if not mixin_key:
                 session_init_failures += 1
                 if session_init_failures >= 3:
-                    logger.warning("WBI密钥连续失败, 剩余 %d 页用 DOM 兜底", total_pages - current_pn + 1)
+                    logger.warning("WBI密钥连续失败, 剩余 %d 页用直连 DOM 兜底", total_pages - current_pn + 1)
                     errors.append("WBI密钥失败(重试3次)")
-                    dom_pg = await ctx.new_page()
+                    direct_ctx = await ctx.browser.new_context(
+                        user_agent=get_random_ua(),
+                        viewport={"width": 1920, "height": 1080},
+                        locale="zh-CN",
+                    )
+                    direct_pg = await direct_ctx.new_page()
                     try:
                         dom_videos, _ = await _dom_fallback(
-                            uid, seen_bvids, dom_pg, progress_callback,
+                            uid, seen_bvids, direct_pg, progress_callback,
                             start_pn=current_pn, max_pages=total_pages - current_pn + 1,
                             task_id=task_id)
                     finally:
-                        await dom_pg.close()
+                        await direct_pg.close()
+                        await direct_ctx.close()
                     for v in dom_videos:
                         videos.append(v)
                     if dom_videos:
