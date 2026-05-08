@@ -74,9 +74,9 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
                 var text = (elems[j].textContent || '').trim();
                 if (text.length > 80 || text.length < 4) continue;
                 // 匹配 \"视频\" + 任意分隔符 + 3-7位数字
-                var vm = text.match(/视频\\W{0,3}?(\\d{3,7})/);
+                var vm = text.match(/视频\W{0,3}?(\d{3,7})/);
                 // 匹配 \"投稿\" + 任意分隔符 + 3-7位数字
-                if (!vm) vm = text.match(/投稿\\W{0,3}?(\\d{3,7})/);
+                if (!vm) vm = text.match(/投稿\W{0,3}?(\d{3,7})/);
                 if (vm) {
                     var n2 = parseInt(vm[1].replace(/[^\\d]/g, ''));
                     if (!isNaN(n2) && n2 > bestVids && n2 < 9999999) bestVids = n2;
@@ -253,7 +253,7 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
     total_count = 0
 
     async def _try_page(url: str, wait_sec: float = 3):
-        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="load")
+        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
         if not resp or not resp.ok:
             return False
         await page.wait_for_timeout(int(wait_sec * 1000))
@@ -763,8 +763,8 @@ async def _get_video_count_from_page(page: Page, uid: str) -> int:
                 for (var i=0; i<elems.length; i++) {
                     var t = (elems[i].textContent || '').trim();
                     if (t.length > 80 || t.length < 4) continue;
-                    var m = t.match(/视频\\\\W{0,3}?(\\\\d{3,7})/);
-                    if (!m) m = t.match(/投稿\\\\W{0,3}?(\\\\d{3,7})/);
+                    var m = t.match(/视频\\W{0,3}?(\\d{3,7})/);
+                    if (!m) m = t.match(/投稿\\W{0,3}?(\\d{3,7})/);
                     if (m) {
                         var n = parseInt(m[1].replace(/[^\\d]/g, ''));
                         if (n > best && n < 9999999) best = n;
