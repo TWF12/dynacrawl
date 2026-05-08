@@ -287,19 +287,23 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
                 if not await _try_page(f"{base_url}&pn={pn}", random.uniform(1.5, 3)):
                     break
 
-        # 策略 2: 分页没拿到 → 空间主页 + 滚动
+        # 策略 2: 分页没拿到 → 空间主页 + 滚动 (重试一次)
         if not all_videos:
-            logger.info("DOM 分页无数据 uid=%s, 切空间主页滚动", uid)
-            if await _try_page(f"https://space.bilibili.com/{uid}", 3):
-                total_count = await _get_video_count_from_page(page, uid) or total_count
-                await _extract_and_report(1)
-                for scroll_i in range(min(max_pages or 30, 50)):
-                    before = len(all_videos)
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(random.randint(2000, 4000))
-                    await _extract_and_report(scroll_i + 2)
-                    if len(all_videos) == before:
-                        break  # 没新内容
+            for attempt in range(2):
+                logger.info("DOM 分页无数据 uid=%s, 切空间主页滚动 (attempt %d)", uid, attempt + 1)
+                if await _try_page(f"https://space.bilibili.com/{uid}", 4):
+                    total_count = await _get_video_count_from_page(page, uid) or total_count
+                    await _extract_and_report(1)
+                    for scroll_i in range(min(max_pages or 30, 50)):
+                        before = len(all_videos)
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await page.wait_for_timeout(random.randint(2000, 4000))
+                        await _extract_and_report(scroll_i + 2)
+                        if len(all_videos) == before:
+                            break  # 没新内容
+                if all_videos:
+                    break
+                await asyncio.sleep(2)  # 短暂等待后重试
 
     except Exception as e:
         logger.warning("DOM 兜底异常 uid=%s: %s", uid, e)
