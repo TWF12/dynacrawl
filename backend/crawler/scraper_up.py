@@ -31,19 +31,22 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
-    # 等待 navBar 出现 (含动态页不同 class)
-    try:
-        await page.wait_for_selector('.nav-bar, .nav-bar__main, .space-navbar', timeout=8000)
-    except Exception:
-        pass
-    await page.wait_for_timeout(2000)
+    await page.wait_for_timeout(5000)
     return await page.evaluate("""
         function() {
             var r = {};
-            // 1. 昵称: 从页面标题提取 (适配 / /dynamic /upload/video 等不同标题格式)
+            // 1. 昵称: 从页面标题提取 (多格式兜底)
             var title = document.title || '';
-            // 格式: "央视新闻的个人空间-..." 或 "央视新闻个人动态-..." 或 "央视新闻的投稿视频-..."
             var m = title.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|的专栏|的视频合集)/);
+            if (!m) m = title.match(/^(.+?)(?:个人|的投稿|的专栏|的主页|\\s*-\\s*)/);
+            if (!m) {
+                // meta og:title 兜底
+                var ogTitle = document.querySelector('meta[property=\"og:title\"]');
+                if (ogTitle) {
+                    var ot = ogTitle.getAttribute('content') || '';
+                    m = ot.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|的专栏)/);
+                }
+            }
             if (m) r.nickname = m[1];
 
             // 2. 头像: 从空间页头像区图片
