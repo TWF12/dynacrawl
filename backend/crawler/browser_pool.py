@@ -87,20 +87,32 @@ class BrowserPool:
 
     @asynccontextmanager
     async def acquire_direct_context(self):
-        """获取无代理无 cookie 的直连 context — DOM 兜底专用"""
+        """获取无代理无 cookie 的 headful 直连 context — DOM 兜底专用 (走 semaphore)"""
         async with self._semaphore:
-            await self.start()
-            ua = get_random_ua()
-            context = await self._browser.new_context(
-                user_agent=ua,
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-                # 无 proxy, 无 storage_state → 直连 + 无登录态
-            )
+            ctx = await self.create_direct_context()
             try:
-                yield context
+                yield ctx
             finally:
-                await context.close()
+                await ctx.close()
+
+    async def create_direct_context(self) -> BrowserContext:
+        """创建无代理无cookie的 headful 直连 context (不走 semaphore, 供嵌套调用)"""
+        await self._ensure_headful_browser()
+        ua = get_random_ua()
+        context = await self._headful_browser.new_context(
+            user_agent=ua,
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
+            # 无 proxy, 无 storage_state → 直连 + 无登录态
+        )
+        await apply_stealth(context)
+        await context.set_extra_http_headers({
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
+            "Sec-Ch-UA-Platform": '"Windows"',
+        })
+        return context
 
     async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
         """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP"""

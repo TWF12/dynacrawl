@@ -17,59 +17,72 @@ logger = logging.getLogger(__name__)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
 
-async def _make_direct_page(from_page: Page):
-    """从现有 page 的 browser 创建无代理直连 page (绕过 pool, DOM 兜底专用)"""
-    browser = from_page.context.browser
-    ua = get_random_ua()
-    ctx = await browser.new_context(
-        user_agent=ua,
-        viewport={"width": 1920, "height": 1080},
-        locale="zh-CN",
-    )
+async def _make_direct_page(from_page: Page = None):
+    """创建无代理直连 headful page (DOM 兜底专用, 不走 pool semaphore)"""
+    ctx = await browser_pool.create_direct_context()
     pg = await ctx.new_page()
     return ctx, pg
 
 
 async def _dom_extract_up_info(page: Page, uid: str) -> dict:
-    """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数"""
+    """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数 (适配新版 B站 无 __INITIAL_STATE__)"""
     space_url = f"https://space.bilibili.com/{uid}"
-    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
     await page.wait_for_timeout(2000)
     return await page.evaluate("""
         function() {
             var r = {};
-            var s = window.__INITIAL_STATE__;
-            if (s && s.card) {
-                r.nickname = s.card.name || '';
-                r.avatar_url = s.card.face || '';
-                r.follower_count = parseInt(s.card.fans) || 0;
-            }
-            if (!r.nickname) {
-                var nameEl = document.querySelector('#h-name, .h-name, .name');
-                if (nameEl) r.nickname = nameEl.textContent.trim();
-            }
-            if (!r.avatar_url) {
-                var avaEl = document.querySelector('#h-avatar img, .h-avatar img, .avatar img');
-                if (avaEl) r.avatar_url = avaEl.src || '';
-            }
-            if (!r.follower_count) {
-                var fansEl = document.querySelector('.h-fans .count, .fans-count, [class*=fans] .count');
-                if (fansEl) r.follower_count = parseInt(fansEl.textContent.replace(/[^0-9.]/g,'')) || 0;
-            }
-            var sideBar = document.querySelector('#submit-video-type-filter, .n-video .num, .video .num');
-            if (sideBar) {
-                r.video_count = parseInt(sideBar.textContent.replace(/[^0-9]/g,'')) || 0;
-            }
-            if (!r.video_count) {
-                var statEls = document.querySelectorAll('.n-statistics .item .num, .statistics-item .count');
-                for (var i=0; i<statEls.length; i++) {
-                    var txt = statEls[i].textContent.trim();
-                    var num = parseInt(txt.replace(/[^0-9.]/g,'')) || 0;
-                    if (num > 100) { r.video_count = num; break; }
+            // 1. 昵称: 从页面标题提取 "{name}的个人空间..."
+            var title = document.title || '';
+            var m = title.match(/^(.+?)的个人空间/);
+            if (m) r.nickname = m[1];
+
+            // 2. 头像: 从空间页头像区图片
+            var avatarImg = document.querySelector('#h-avatar img, .h-avatar img, .bili-avatar img, [class*=avatar] img');
+            if (!avatarImg) {
+                var imgs = document.querySelectorAll('img');
+                for (var k=0; k<imgs.length; k++) {
+                    var src = imgs[k].getAttribute('src') || '';
+                    if (src.indexOf('hdslb.com')>=0 && (src.indexOf('face')>=0 || src.indexOf('avatar')>=0)) {
+                        avatarImg = imgs[k]; break;
+                    }
                 }
             }
+            if (avatarImg) r.avatar_url = avatarImg.getAttribute('src') || avatarImg.getAttribute('data-src') || '';
+
+            // 3. 粉丝数: 扫描 span/div/a 的 textContent (含父元素拼接), 取最大值
+            var elems = document.querySelectorAll('span, div, a');
+            var bestFans = 0;
+            for (var i=0; i<elems.length; i++) {
+                var txt = (elems[i].textContent || '').trim();
+                if (txt.length > 50 || txt.length < 4) continue;
+                // 格式: \"粉丝835.4万\" 或 \"粉丝 2374.0万\" (标签和数字可能在不同子元素)
+                var fm = txt.match(/粉丝[^\\d]*([\\d.]+)\\s*万?/);
+                if (fm) {
+                    var n = parseFloat(fm[1].replace(/[^\\d.]/g, ''));
+                    if (txt.indexOf('万')>=0 || fm[0].indexOf('万')>=0) n = Math.round(n * 10000);
+                    if (n > bestFans) bestFans = Math.round(n);
+                }
+            }
+            if (bestFans > 0) r.follower_count = bestFans;
+
+            // 4. 视频数: 找 \"视频·9938\" / \"投稿999\" 格式, 取最大值
+            var bestVids = 0;
+            for (var j=0; j<elems.length; j++) {
+                var text = (elems[j].textContent || '').trim();
+                if (text.length > 80 || text.length < 4) continue;
+                // 匹配 \"视频\" + 任意分隔符 + 3-7位数字
+                var vm = text.match(/视频\\W{0,3}?(\\d{3,7})/);
+                // 匹配 \"投稿\" + 任意分隔符 + 3-7位数字
+                if (!vm) vm = text.match(/投稿\\W{0,3}?(\\d{3,7})/);
+                if (vm) {
+                    var n2 = parseInt(vm[1].replace(/[^\\d]/g, ''));
+                    if (!isNaN(n2) && n2 > bestVids && n2 < 9999999) bestVids = n2;
+                }
+            }
+            if (bestVids > 0) r.video_count = bestVids;
             return r;
         }
     """)
@@ -142,13 +155,12 @@ async def scrape_up_info(page: Page, uid: str) -> Optional[dict]:
             errors.append("arc/search超时")
             api_failed = True
 
-    # Phase 3: DOM 提取 — API 故障时用直连, 否则用当前 page
+    # Phase 3: DOM 提取 — API 故障时用 headful 直连, 否则用当前 page
     try:
         dom = None
         if api_failed:
-            # 代理疑似故障 → 直连 DOM
-            logger.info("API 故障 uid=%s, 直连 DOM 提取", uid)
-            direct_ctx, direct_pg = await _make_direct_page(page)
+            logger.info("API 故障 uid=%s, 直连 headful DOM 提取", uid)
+            direct_ctx, direct_pg = await _make_direct_page()
             try:
                 dom = await _dom_extract_up_info(direct_pg, uid)
             finally:
@@ -236,46 +248,59 @@ async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
 async def _dom_fallback(uid: str, seen_bvids: set, page,
                        progress_callback=None, start_pn: int = 1,
                        max_pages: int = 0, task_id: str = "") -> tuple[list[dict], int]:
-    """DOM 兜底: 分页提取视频列表 (API 不可用时保底), 返回 (videos, total_count)"""
+    """DOM 兜底: 视频列表页 + 空间主页 + 滚动加载, 返回 (videos, total_count)"""
     all_videos: list[dict] = []
     total_count = 0
-    base_url = f"https://space.bilibili.com/{uid}/video?tid=0&keyword=&order=pubdate"
+
+    async def _try_page(url: str, wait_sec: float = 3):
+        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="load")
+        if not resp or not resp.ok:
+            return False
+        await page.wait_for_timeout(int(wait_sec * 1000))
+        return True
+
+    async def _extract_and_report(pn: int):
+        videos = await _dom_extract(page, uid, seen_bvids)
+        if videos:
+            all_videos.extend(videos)
+            if progress_callback:
+                await progress_callback(
+                    pn, max(1, total_count or 1),
+                    f"DOM 兜底: 已获取 {len(all_videos)}/{total_count or '?'} 条")
+        return videos
 
     try:
+        # 策略 1: 视频列表分页 (带 &pn=N)
+        base_url = f"https://space.bilibili.com/{uid}/video?tid=0&keyword=&order=pubdate"
         first_url = f"{base_url}&pn={start_pn}"
-        resp = await page.goto(first_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-        if not resp or not resp.ok:
-            resp = await page.goto(f"https://space.bilibili.com/{uid}",
-                                   timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-        await page.wait_for_timeout(2000)
-
-        total_count = await _get_video_count_from_page(page, uid)
-
-        pn = start_pn
-        dom_max = max_pages or 50
-        while pn - start_pn < dom_max:
-            if task_id and is_task_cancelled(task_id):
-                break
-
-            videos = await _dom_extract(page, uid, seen_bvids)
-            if videos:
-                all_videos.extend(videos)
-                if progress_callback:
-                    await progress_callback(
-                        pn - start_pn + 1, max(1, total_count or 1),
-                        f"DOM 兜底: 已获取 {len(all_videos)}/{total_count or '?'} 条")
-            else:
-                break
-
-            pn += 1
-            next_url = f"{base_url}&pn={pn}"
-            try:
-                resp = await page.goto(next_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-                if not resp or not resp.ok:
+        if await _try_page(first_url):
+            total_count = await _get_video_count_from_page(page, uid)
+            pn = start_pn
+            dom_max = max_pages or 50
+            while pn - start_pn < dom_max:
+                if task_id and is_task_cancelled(task_id):
                     break
-                await page.wait_for_timeout(random.uniform(1000, 3000))
-            except Exception:
-                break
+                videos = await _extract_and_report(pn - start_pn + 1)
+                if not videos:
+                    break
+                pn += 1
+                if not await _try_page(f"{base_url}&pn={pn}", random.uniform(1.5, 3)):
+                    break
+
+        # 策略 2: 分页没拿到 → 空间主页 + 滚动
+        if not all_videos:
+            logger.info("DOM 分页无数据 uid=%s, 切空间主页滚动", uid)
+            if await _try_page(f"https://space.bilibili.com/{uid}", 3):
+                total_count = await _get_video_count_from_page(page, uid) or total_count
+                await _extract_and_report(1)
+                for scroll_i in range(min(max_pages or 10, 20)):
+                    before = len(all_videos)
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(random.randint(1500, 3000))
+                    await _extract_and_report(scroll_i + 2)
+                    if len(all_videos) == before:
+                        break  # 没新内容
+
     except Exception as e:
         logger.warning("DOM 兜底异常 uid=%s: %s", uid, e)
 
@@ -354,13 +379,9 @@ async def scrape_up_videos(
     async with browser_pool.acquire_headful_context(rotate=False) as ctx:
         mixin_key = await _init_session(ctx, uid)
         if not mixin_key:
-            logger.warning("WBI密钥失败 uid=%s, 直连 DOM 兜底", uid)
+            logger.warning("WBI密钥失败 uid=%s, 直连 headful DOM 兜底", uid)
             errors.append("WBI密钥失败")
-            direct_ctx = await ctx.browser.new_context(
-                user_agent=get_random_ua(),
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-            )
+            direct_ctx = await browser_pool.create_direct_context()
             direct_pg = await direct_ctx.new_page()
             try:
                 dom_videos, dom_total = await _dom_fallback(
@@ -385,13 +406,9 @@ async def scrape_up_videos(
             await pg1.close()
 
         if page1_data is None:
-            # arc/search 失败 → 直连 DOM 兜底
-            logger.warning("arc/search 无响应 uid=%s，直连 DOM 兜底", uid)
-            direct_ctx = await ctx.browser.new_context(
-                user_agent=get_random_ua(),
-                viewport={"width": 1920, "height": 1080},
-                locale="zh-CN",
-            )
+            # arc/search 失败 → 直连 headful DOM 兜底
+            logger.warning("arc/search 无响应 uid=%s，直连 headful DOM 兜底", uid)
+            direct_ctx = await browser_pool.create_direct_context()
             direct_pg = await direct_ctx.new_page()
             try:
                 dom_videos, dom_total = await _dom_fallback(
@@ -486,13 +503,9 @@ async def scrape_up_videos(
             if not mixin_key:
                 session_init_failures += 1
                 if session_init_failures >= 3:
-                    logger.warning("WBI密钥连续失败, 剩余 %d 页用直连 DOM 兜底", total_pages - current_pn + 1)
+                    logger.warning("WBI密钥连续失败, 剩余 %d 页用直连 headful DOM 兜底", total_pages - current_pn + 1)
                     errors.append("WBI密钥失败(重试3次)")
-                    direct_ctx = await ctx.browser.new_context(
-                        user_agent=get_random_ua(),
-                        viewport={"width": 1920, "height": 1080},
-                        locale="zh-CN",
-                    )
+                    direct_ctx = await browser_pool.create_direct_context()
                     direct_pg = await direct_ctx.new_page()
                     try:
                         dom_videos, _ = await _dom_fallback(
@@ -745,31 +758,23 @@ def _pick_status(errors: list[str], has_data: bool) -> str:
 
 
 async def _get_video_count_from_page(page: Page, uid: str) -> int:
-    """从页面的 sidebar 提取视频总数"""
+    """从页面 DOM 提取视频总数 (适配新版 B站 无 __INITIAL_STATE__)"""
     try:
         count = await page.evaluate("""
             () => {
-                let activeItem = document.querySelector('.side-nav__item.active');
-                if (activeItem) {
-                    let subText = activeItem.querySelector('.side-nav__item__sub-text');
-                    if (subText) {
-                        let n = parseInt((subText.textContent || '').trim());
-                        if (n > 0) return n;
+                var elems = document.querySelectorAll('span, div, a');
+                var best = 0;
+                for (var i=0; i<elems.length; i++) {
+                    var t = (elems[i].textContent || '').trim();
+                    if (t.length > 80 || t.length < 4) continue;
+                    var m = t.match(/视频\\\\W{0,3}?(\\\\d{3,7})/);
+                    if (!m) m = t.match(/投稿\\\\W{0,3}?(\\\\d{3,7})/);
+                    if (m) {
+                        var n = parseInt(m[1].replace(/[^\\d]/g, ''));
+                        if (n > best && n < 9999999) best = n;
                     }
                 }
-                let items = document.querySelectorAll('.side-nav__item');
-                for (let item of items) {
-                    let text = (item.textContent || '').trim();
-                    let m = text.match(/视频\\s*(\\d+)/);
-                    if (m) return parseInt(m[1]);
-                }
-                let tabs = document.querySelectorAll('.nav-tab__item');
-                for (let tab of tabs) {
-                    let text = (tab.textContent || '').trim();
-                    let m = text.match(/投稿\\s*(\\d+)/);
-                    if (m) return parseInt(m[1]);
-                }
-                return 0;
+                return best;
             }
         """)
         return count or 0
