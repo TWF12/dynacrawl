@@ -35,16 +35,15 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     return await page.evaluate("""
         function() {
             var r = {};
-            // 1. 昵称: 从页面标题提取 (多格式兜底)
+            // 1. 昵称: 从页面标题提取 (多格式兜底, 含/不含"的")
             var title = document.title || '';
-            var m = title.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|的专栏|的视频合集)/);
-            if (!m) m = title.match(/^(.+?)(?:个人|的投稿|的专栏|的主页|\\s*-\\s*)/);
+            var m = title.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|投稿视频|的专栏|的合集|的主页)/);
+            if (!m) m = title.match(/^(.+?)(?:-|\\|)/);  // 兜底: 第一个分隔符前的内容
             if (!m) {
-                // meta og:title 兜底
                 var ogTitle = document.querySelector('meta[property=\"og:title\"]');
                 if (ogTitle) {
                     var ot = ogTitle.getAttribute('content') || '';
-                    m = ot.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|的专栏)/);
+                    m = ot.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|投稿视频)/);
                 }
             }
             if (m) r.nickname = m[1];
