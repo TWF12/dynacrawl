@@ -31,13 +31,19 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
-    await page.wait_for_timeout(4000)
+    # 等待 navBar 出现 (含动态页不同 class)
+    try:
+        await page.wait_for_selector('.nav-bar, .nav-bar__main, .space-navbar', timeout=8000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(2000)
     return await page.evaluate("""
         function() {
             var r = {};
-            // 1. 昵称: 从页面标题提取 "{name}的个人空间..."
+            // 1. 昵称: 从页面标题提取 (适配 / /dynamic /upload/video 等不同标题格式)
             var title = document.title || '';
-            var m = title.match(/^(.+?)的个人空间/);
+            // 格式: "央视新闻的个人空间-..." 或 "央视新闻个人动态-..." 或 "央视新闻的投稿视频-..."
+            var m = title.match(/^(.+?)(?:的个人空间|个人动态|的投稿视频|的专栏|的视频合集)/);
             if (m) r.nickname = m[1];
 
             // 2. 头像: 从空间页头像区图片
@@ -57,7 +63,7 @@ async def _dom_extract_up_info(page: Page, uid: str) -> dict:
             var elems = document.querySelectorAll('span, div, a');
             var bestFans = 0;
             // 优先: 导航栏 "关注28粉丝2374.0万"
-            var navBar = document.querySelector('.nav-bar.space-navbar, .nav-bar__main');
+            var navBar = document.querySelector('.nav-bar.space-navbar, .nav-bar__main, .nav-bar, [class*=nav-bar]');
             if (navBar) {
                 var fm0 = navBar.textContent.match(/粉丝[^\\d]*([\\d.]+)\\s*万?/);
                 if (fm0) {
