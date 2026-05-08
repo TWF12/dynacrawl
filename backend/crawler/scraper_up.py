@@ -314,23 +314,32 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
         if not all_videos:
             for attempt in range(2):
                 logger.info("DOM 分页无数据 uid=%s, 切空间主页滚动 (attempt %d)", uid, attempt + 1)
-                if await _try_page(f"https://space.bilibili.com/{uid}", 4):
-                    total_count = await _get_video_count_from_page(page, uid) or total_count
-                    await _extract_and_report(1)
-                    for scroll_i in range(min(max_pages or 30, 50)):
-                        before = len(all_videos)
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(random.randint(2000, 4000))
-                        await _extract_and_report(scroll_i + 2)
-                        if len(all_videos) == before:
-                            break  # 没新内容
+                ok = await _try_page(f"https://space.bilibili.com/{uid}", 4)
+                if not ok:
+                    logger.warning("空间主页加载失败 uid=%s attempt=%d", uid, attempt + 1)
+                    await asyncio.sleep(2)
+                    continue
+                total_count = await _get_video_count_from_page(page, uid) or total_count
+                logger.info("空间主页加载成功 uid=%s total=%d, 开始滚动提取", uid, total_count)
+                await _extract_and_report(1)
+                for scroll_i in range(min(max_pages or 30, 50)):
+                    before = len(all_videos)
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    await page.wait_for_timeout(random.randint(2000, 4000))
+                    await _extract_and_report(scroll_i + 2)
+                    if len(all_videos) == before:
+                        logger.info("滚动无新内容 uid=%s scroll=%d total=%d", uid, scroll_i, len(all_videos))
+                        break
                 if all_videos:
                     break
-                await asyncio.sleep(2)  # 短暂等待后重试
+                logger.warning("空间主页未提取到视频 uid=%s attempt=%d, 重试", uid, attempt + 1)
+                await asyncio.sleep(2)
 
     except Exception as e:
         logger.warning("DOM 兜底异常 uid=%s: %s", uid, e)
 
+    if not all_videos:
+        logger.warning("DOM 兜底最终无数据 uid=%s", uid)
     return all_videos, total_count
 
 
