@@ -335,7 +335,7 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
 
 
 async def _init_session(ctx, uid: str) -> str | None:
-    """为新 session 获取 mixin_key"""
+    """为新 session 获取 mixin_key。异常(代理超时等)返回 None, 由调用方走 DOM 兜底"""
     pg = await ctx.new_page()
     try:
         resp = await pg.goto("https://www.bilibili.com/", timeout=15000, wait_until="domcontentloaded")
@@ -343,6 +343,8 @@ async def _init_session(ctx, uid: str) -> str | None:
             return None
         await pg.wait_for_timeout(500)
         return await get_mixin_key(pg)
+    except Exception:
+        return None
     finally:
         await pg.close()
 
@@ -374,13 +376,48 @@ async def scrape_up_videos(
                 logger.warning("实时回传失败: %s", exc)
 
     # ================================================================
-    # Phase 1: 第 1 页 — 获取 total_count 和首页视频
+    # Phase 1: 第 1 页 — 获取 total_count 和首页视频 (整体 try-except, 异常时直连 DOM)
     # ================================================================
-    async with browser_pool.acquire_headful_context(rotate=False) as ctx:
-        mixin_key = await _init_session(ctx, uid)
-        if not mixin_key:
-            logger.warning("WBI密钥失败 uid=%s, 直连 headful DOM 兜底", uid)
-            errors.append("WBI密钥失败")
+    phase1_ok = False
+    try:
+        async with browser_pool.acquire_headful_context(rotate=False) as ctx:
+            mixin_key = await _init_session(ctx, uid)
+            if not mixin_key:
+                logger.warning("WBI密钥失败 uid=%s, 直连 headful DOM 兜底", uid)
+                errors.append("WBI密钥失败")
+                raise Exception("WBI密钥失败")
+
+            pg1 = await ctx.new_page()
+            try:
+                page1_data, _ = await _fetch_arc_page(pg1, uid, 1, mixin_key)
+            finally:
+                await pg1.close()
+
+            if page1_data is None:
+                logger.warning("arc/search 无响应 uid=%s，直连 headful DOM 兜底", uid)
+                errors.append("arc/search失败")
+                raise Exception("arc/search失败")
+
+            total_count = _process_arc_data(page1_data, videos, seen_bvids)
+            ps = page1_data.get("page", {}).get("ps", 50)
+            total_pages = (total_count + ps - 1) // ps if total_count else 0
+            if max_pages and max_pages < total_pages:
+                total_pages = max_pages
+
+            logger.info("第 1 页获取 %d 条 uid=%s (已有 %d 共 %d 条 %d 页)",
+                        len(videos), uid, existing_count, total_count, total_pages)
+            await _save_page(videos[:])
+            await report_page_and_rotate()
+            if progress_callback and (existing_count == 0 or len(videos) > 0):
+                await progress_callback(1, total_pages,
+                                        f"第 1/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条")
+            phase1_ok = True
+    except Exception as e:
+        logger.warning("Phase1 异常 uid=%s: %s, 直连 headful DOM 兜底", uid, str(e)[:80])
+
+    if not phase1_ok:
+        # API 路径全失败 → 直连 headful DOM 兜底
+        try:
             direct_ctx = await browser_pool.create_direct_context()
             direct_pg = await direct_ctx.new_page()
             try:
@@ -396,52 +433,11 @@ async def scrape_up_videos(
                 errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
             else:
                 errors.append("API+DOM均未提取到视频")
-            return {"videos": videos, "total_count": total_count, "errors": errors,
-                    "status": _pick_status(errors, len(videos) > 0)}
-
-        pg1 = await ctx.new_page()
-        try:
-            page1_data, _ = await _fetch_arc_page(pg1, uid, 1, mixin_key)
-        finally:
-            await pg1.close()
-
-        if page1_data is None:
-            # arc/search 失败 → 直连 headful DOM 兜底
-            logger.warning("arc/search 无响应 uid=%s，直连 headful DOM 兜底", uid)
-            direct_ctx = await browser_pool.create_direct_context()
-            direct_pg = await direct_ctx.new_page()
-            try:
-                dom_videos, dom_total = await _dom_fallback(
-                    uid, seen_bvids, direct_pg, progress_callback)
-            finally:
-                await direct_pg.close()
-                await direct_ctx.close()
-            for v in dom_videos:
-                videos.append(v)
-            total_count = dom_total or 0
-            if total_count:
-                errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
-            elif len(videos) > 0:
-                errors.append(f"DOM提取 {len(videos)} 条")
-            else:
-                errors.append("API+DOM均未提取到视频")
-            return {"videos": videos, "total_count": total_count, "errors": errors,
-                    "status": _pick_status(errors, len(videos) > 0)}
-
-        total_count = _process_arc_data(page1_data, videos, seen_bvids)
-        ps = page1_data.get("page", {}).get("ps", 50)
-        total_pages = (total_count + ps - 1) // ps if total_count else 0
-        if max_pages and max_pages < total_pages:
-            total_pages = max_pages
-
-        logger.info("第 1 页获取 %d 条 uid=%s (已有 %d 共 %d 条 %d 页)",
-                    len(videos), uid, existing_count, total_count, total_pages)
-        await _save_page(videos[:])
-        await report_page_and_rotate()  # 全局统一轮换
-        # 续爬时第1页只是验证, 没有新视频就不发进度, 避免闪现旧数量
-        if progress_callback and (existing_count == 0 or len(videos) > 0):
-            await progress_callback(1, total_pages,
-                                    f"第 1/{total_pages} 页, 已获取 {existing_count + len(videos)}/{total_count} 条")
+        except Exception as e2:
+            logger.error("直连 DOM 兜底也失败 uid=%s: %s", uid, e2)
+            errors.append("DOM兜底失败")
+        return {"videos": videos, "total_count": total_count, "errors": errors,
+                "status": _pick_status(errors, len(videos) > 0)}
 
     if total_pages <= 1:
         return {"videos": videos, "total_count": total_count, "errors": errors,

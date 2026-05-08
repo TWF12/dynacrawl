@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed
+from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed, get_random_ua
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
@@ -35,14 +35,16 @@ def _pick_video_status(errors: list[str], has_data: bool) -> str:
 
 
 async def scrape_video_info(page: Page, bv_id: str) -> dict:
-    """爬取视频基本信息 (API 优先, 页面降级) — headless 即可"""
+    """爬取视频基本信息 (API 优先, 直连 DOM 降级)"""
     result: dict = {"bv_id": bv_id}
     errors: list[str] = []
+    api_failed = False
     await page.wait_for_timeout(random.randint(500, 2000))
 
+    # Phase 1: view API
     try:
         api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv_id}"
-        resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+        resp = await page.goto(api_url, timeout=15000, wait_until="domcontentloaded")
         data = None
         if resp and resp.ok:
             text = await page.evaluate("() => document.body.innerText")
@@ -74,46 +76,71 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
                 logger.warning("view API code=%d bv=%s", code, bv_id)
             else:
                 errors.append("view异常")
+    except Exception:
+        errors.append("view超时")
+        api_failed = True
 
-        # DOM 降级
-        logger.warning("API获取视频信息失败, 尝试页面提取 bv_id=%s", bv_id)
-        await random_delay()
-        video_url = f"https://www.bilibili.com/video/{bv_id}"
-        response = await page.goto(video_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
-        if response and response.ok:
-            data = await page.evaluate("""
-                function() {
-                    if (window.__INITIAL_STATE__) {
-                        var vd = window.__INITIAL_STATE__.videoData || {};
-                        return { title: vd.title || '', stat: vd.stat || {} };
+    # Phase 2: DOM 降级 — API 故障时用直连 headful, 否则用当前 page
+    logger.warning("API获取视频信息失败, 尝试DOM提取 bv_id=%s api_failed=%s", bv_id, api_failed)
+    await random_delay()
+    try:
+        dom = None
+        if api_failed:
+            direct_ctx = await browser_pool.create_direct_context()
+            direct_pg = await direct_ctx.new_page()
+            try:
+                video_url = f"https://www.bilibili.com/video/{bv_id}"
+                response = await direct_pg.goto(video_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+                if response and response.ok:
+                    await direct_pg.wait_for_timeout(2000)
+                    dom = await direct_pg.evaluate("""
+                        function() {
+                            if (window.__INITIAL_STATE__) {
+                                var vd = window.__INITIAL_STATE__.videoData || {};
+                                return { title: vd.title || '', stat: vd.stat || {} };
+                            }
+                            var r = { title: document.title||'', stat: {} };
+                            if (r.title.indexOf('_哔哩哔哩')>=0) r.title = r.title.split('_哔哩哔哩')[0];
+                            return r;
+                        }
+                    """)
+            finally:
+                await direct_pg.close()
+                await direct_ctx.close()
+        else:
+            video_url = f"https://www.bilibili.com/video/{bv_id}"
+            response = await page.goto(video_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
+            if response and response.ok:
+                await page.wait_for_timeout(2000)
+                dom = await page.evaluate("""
+                    function() {
+                        if (window.__INITIAL_STATE__) {
+                            var vd = window.__INITIAL_STATE__.videoData || {};
+                            return { title: vd.title || '', stat: vd.stat || {} };
+                        }
+                        var r = { title: document.title||'', stat: {} };
+                        if (r.title.indexOf('_哔哩哔哩')>=0) r.title = r.title.split('_哔哩哔哩')[0];
+                        return r;
                     }
-                    var r = { title: document.title||'', stat: {} };
-                    if (r.title.indexOf('_哔哩哔哩')>=0) r.title = r.title.split('_哔哩哔哩')[0];
-                    document.querySelectorAll('.video-info-detail span, .video-stat span').forEach(function(el){
-                        var txt = el.textContent || '';
-                        var num = parseInt(txt.replace(/[^0-9.]/g,''))||0;
-                        if (txt.indexOf('播放')>=0||txt.indexOf('观看')>=0) r.stat.view = num;
-                        if (txt.indexOf('弹幕')>=0) r.stat.danmaku = num;
-                        if (txt.indexOf('点赞')>=0) r.stat.like = num;
-                        if (txt.indexOf('投币')>=0||txt.indexOf('硬币')>=0) r.stat.coin = num;
-                        if (txt.indexOf('评论')>=0) r.stat.reply = num;
-                    });
-                    return r;
-                }
-            """)
-            result["title"] = data.get("title", "")
-            stat = data.get("stat") or {}
+                """)
+
+        if dom:
+            result["title"] = dom.get("title", "")
+            stat = dom.get("stat") or {}
             result["play_count"] = stat.get("view", 0)
             result["like_count"] = stat.get("like", 0)
             result["coin_count"] = stat.get("coin", 0)
             result["danmaku_count"] = stat.get("danmaku", 0)
             result["comment_count"] = stat.get("reply", 0)
-            errors.append("DOM提取")
+            if dom.get("title"):
+                errors.append("DOM提取")
+            else:
+                errors.append("视频页无标题")
         else:
             errors.append("视频页失败")
     except Exception as e:
-        logger.error("爬取视频信息失败 bv_id=%s: %s", bv_id, e)
-        errors.append("超时")
+        logger.error("DOM降级失败 bv_id=%s: %s", bv_id, e)
+        errors.append("DOM降级失败")
 
     result["errors"] = errors
     result["status"] = _pick_video_status(errors, len(result) > 1)
