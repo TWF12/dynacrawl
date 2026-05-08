@@ -26,8 +26,8 @@ async def _make_direct_page(from_page: Page = None):
 
 async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数 (适配新版 B站 无 __INITIAL_STATE__)"""
-    # 用 /dynamic 页面 — 登录墙也保留 navBar (昵称/粉丝/投稿数)
-    space_url = f"https://space.bilibili.com/{uid}/dynamic"
+    # 用 /upload/video 页面 — 登录墙下 navBar(粉丝) + section header(真实视频数) 均可见
+    space_url = f"https://space.bilibili.com/{uid}/upload/video"
     resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
