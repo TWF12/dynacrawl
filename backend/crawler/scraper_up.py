@@ -27,10 +27,10 @@ async def _make_direct_page(from_page: Page = None):
 async def _dom_extract_up_info(page: Page, uid: str) -> dict:
     """从空间页 DOM 提取 UP 主昵称/头像/粉丝/视频数 (适配新版 B站 无 __INITIAL_STATE__)"""
     space_url = f"https://space.bilibili.com/{uid}"
-    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+    resp = await page.goto(space_url, timeout=PAGE_TIMEOUT, wait_until="load")
     if not resp or not resp.ok:
         return {}
-    await page.wait_for_timeout(3000)
+    await page.wait_for_timeout(4000)
     return await page.evaluate("""
         function() {
             var r = {};
@@ -253,7 +253,7 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
     total_count = 0
 
     async def _try_page(url: str, wait_sec: float = 3):
-        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="networkidle")
+        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="load")
         if not resp or not resp.ok:
             return False
         await page.wait_for_timeout(int(wait_sec * 1000))
