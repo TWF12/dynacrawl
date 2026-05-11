@@ -764,8 +764,8 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
             if cookie_manager.count == 0:
                 logger.error("所有 Cookie 已用尽! 后续请求将无登录态")
         if code in (-352, -412):
-            logger.error("风控! pn=%d code=%d uid=%s, 等待30-60s后重试", pn, code, uid)
-            await asyncio.sleep(random.uniform(30, 60))
+            logger.error("风控! pn=%d code=%d uid=%s, 等待5-10s后重试", pn, code, uid)
+            await asyncio.sleep(random.uniform(5, 10))
             data = await _do_fetch()
             if data and data.get("code") == 0 and isinstance(data.get("data"), dict):
                 logger.info("风控重试成功 pn=%d", pn)
