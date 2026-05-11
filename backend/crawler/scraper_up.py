@@ -547,28 +547,24 @@ async def scrape_up_videos(
         async with browser_pool.acquire_headful_context(rotate=False) as ctx:
             mixin_key = await _init_session(ctx, uid)
             if not mixin_key:
-                session_init_failures += 1
-                if session_init_failures >= 3:
-                    logger.warning("WBI密钥连续失败, 剩余 %d 页用直连 headful DOM 兜底", total_pages - current_pn + 1)
-                    errors.append("WBI密钥失败(重试3次)")
-                    direct_ctx = await browser_pool.create_direct_context()
-                    direct_pg = await direct_ctx.new_page()
-                    try:
-                        dom_videos, _ = await _dom_fallback(
-                            uid, seen_bvids, direct_pg, progress_callback,
-                            start_pn=current_pn, max_pages=total_pages - current_pn + 1,
-                            task_id=task_id)
-                    finally:
-                        await direct_pg.close()
-                        await direct_ctx.close()
-                    for v in dom_videos:
-                        videos.append(v)
-                    if dom_videos:
-                        errors.append(f"DOM续爬 {len(dom_videos)} 条")
-                    break
-                logger.warning("_init_session 失败, 等待后重试 (%d/3)", session_init_failures)
-                await asyncio.sleep(random.uniform(10, 20))
-                continue  # 不 break, 让外层 while 创建新 context
+                # proxy 大概率坏了, 立即 DOM 兜底不重试
+                logger.warning("WBI密钥失败, 剩余 %d 页用直连 headful DOM 兜底", total_pages - current_pn + 1)
+                errors.append("WBI密钥失败")
+                direct_ctx = await browser_pool.create_direct_context()
+                direct_pg = await direct_ctx.new_page()
+                try:
+                    dom_videos, _ = await _dom_fallback(
+                        uid, seen_bvids, direct_pg, progress_callback,
+                        start_pn=current_pn, max_pages=total_pages - current_pn + 1,
+                        task_id=task_id)
+                finally:
+                    await direct_pg.close()
+                    await direct_ctx.close()
+                for v in dom_videos:
+                    videos.append(v)
+                if dom_videos:
+                    errors.append(f"DOM续爬 {len(dom_videos)} 条")
+                break
 
             session_init_failures = 0  # 成功后重置
             session_pages = 0
