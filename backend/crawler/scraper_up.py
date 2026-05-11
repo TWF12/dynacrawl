@@ -375,13 +375,13 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
     """渐进延迟: 按进度比例缩放, 小UP快大UP慢, 兼顾效率与风控"""
     ratio = pn / max(total_pages, 20)
     if ratio <= 0.15:
-        return random.uniform(2, 6)
+        return random.uniform(1, 3)
     elif ratio <= 0.4:
-        return random.uniform(6, 15)
+        return random.uniform(2, 5)
     elif ratio <= 0.7:
-        return random.uniform(12, 25)
+        return random.uniform(3, 8)
     else:
-        return random.uniform(18, 35)
+        return random.uniform(5, 12)
 
 
 async def _init_session(ctx, uid: str) -> str | None:
