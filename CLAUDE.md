@@ -33,6 +33,13 @@
 - DOM 兜底：`/upload/video` 页面（登录墙下仍可见 navBar）
 - Cookie 管理：`data/cookies/*.json`，`cookie_manager.py` 轮换
 
+## 测试数据集
+UP主 UID (10个): `1619759224` `456664753` `400999844` `2475977` `37974444` `688379639` `95228778` `66569167` `15773384` `8047632`
+
+视频 BV (10个): `BV1rSoLBWErZ` `BV1h29DBaEzL` `BV15C4y1Y71E` `BV1ZR96BLEif` `BV1b7411N798` `BV1MFokBkEzC` `BV1JBorBoEXh` `BV1wZ92BBEGV` `BV1LB4y1G7gG` `BV1YiaMzkEGz`
+
+测试时从中自行挑选，不需要用户每次指定。
+
 ## 规则持久化
 新规则/偏好/注意事项**直接追加到此文件末尾**，不再使用 memory 目录。
 CLAUDE.md 是唯一的持久化规则源。
