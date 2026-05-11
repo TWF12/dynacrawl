@@ -33,6 +33,6 @@
 - DOM 兜底：`/upload/video` 页面（登录墙下仍可见 navBar）
 - Cookie 管理：`data/cookies/*.json`，`cookie_manager.py` 轮换
 
-## Memory 目录
-动态上下文存 `C:\Users\TWF21\.claude\projects\d--dynacrawl\memory\`。
-新规则自动写入，不再需要用户重复提醒。
+## 规则持久化
+新规则/偏好/注意事项**直接追加到此文件末尾**，不再使用 memory 目录。
+CLAUDE.md 是唯一的持久化规则源。
