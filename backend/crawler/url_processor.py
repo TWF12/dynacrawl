@@ -145,7 +145,26 @@ async def process_url_message(
                 ))
 
         elif url_type == "video_comments":
-            pass  # 由下方独立代码块处理, 不占 acquire_page 的 semaphore
+            pass  # 独立代码块处理
+        elif url_type == "video_api":
+            # video_api 用 headful context (同 up_video_list), B站检测headless返回受限内容
+            async with browser_pool.acquire_headful_context() as headful_ctx:
+                hf_page = await headful_ctx.new_page()
+                try:
+                    result = await scrape_video_info(hf_page, msg.get("bv_id", ""))
+                finally:
+                    await hf_page.close()
+                if result and (result.get("title") or result.get("raw_data")):
+                    session.add(VideoInfo(
+                        task_id=task_id, bv_id=result.get("bv_id", ""),
+                        title=result.get("title", ""),
+                        play_count=result.get("play_count"),
+                        like_count=result.get("like_count"),
+                        coin_count=result.get("coin_count"),
+                        danmaku_count=result.get("danmaku_count"),
+                        comment_count=result.get("comment_count"),
+                        raw_data=result.get("raw_data"),
+                    ))
         else:
             async with browser_pool.acquire_page() as page:
                 if url_type == "up_api":
@@ -171,20 +190,6 @@ async def process_url_message(
                                 video_count=result.get("video_count"),
                                 raw_data=result.get("raw_data"),
                             ))
-
-                elif url_type == "video_api":
-                    result = await scrape_video_info(page, msg.get("bv_id", ""))
-                    if result and (result.get("title") or result.get("raw_data")):
-                        session.add(VideoInfo(
-                            task_id=task_id, bv_id=result.get("bv_id", ""),
-                            title=result.get("title", ""),
-                            play_count=result.get("play_count"),
-                            like_count=result.get("like_count"),
-                            coin_count=result.get("coin_count"),
-                            danmaku_count=result.get("danmaku_count"),
-                            comment_count=result.get("comment_count"),
-                            raw_data=result.get("raw_data"),
-                        ))
 
         # video_comments 独立处理 (不占 acquire_page semaphore)
         if url_type == "video_comments":

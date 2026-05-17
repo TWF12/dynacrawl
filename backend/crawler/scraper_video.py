@@ -227,7 +227,7 @@ async def scrape_video_comments(
 
                         code = data.get("code")
                         if code in (-352, -412):
-                            continue
+                            break  # 换 session (新 proxy + cookie), 不同 session 死磕
                         if code in (-101, 3, -6):
                             logger.warning("Cookie 已过期! code=%d bv=%s, 自动删除", code, bv_id)
                             await cookie_manager.mark_invalid(pg.context)
