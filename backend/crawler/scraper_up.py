@@ -285,7 +285,7 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
     total_count = 0
 
     async def _try_page(url: str, wait_sec: float = 3):
-        resp = await page.goto(url, timeout=PAGE_TIMEOUT, wait_until="load")
+        resp = await page.goto(url, timeout=20000, wait_until="load")
         if not resp or not resp.ok:
             return False
         await page.wait_for_timeout(int(wait_sec * 1000))
@@ -466,26 +466,43 @@ async def scrape_up_videos(
         logger.warning("Phase1 异常 uid=%s: %s, 直连 headful DOM 兜底", uid, str(e)[:80])
 
     if not phase1_ok:
-        # API 路径全失败 → 直连 headful DOM 兜底
+        # API 全失败 → DOM 兜底: 先代理(换节点) → 后直连
+        dom_videos: list[dict] = []
+        dom_total = 0
+
+        # 尝试1: headful + 代理 (rotate=True 触发Clash换节点)
         try:
-            direct_ctx = await browser_pool.create_direct_context()
-            direct_pg = await direct_ctx.new_page()
+            async with browser_pool.acquire_headful_context(rotate=True) as proxy_ctx:
+                pg = await proxy_ctx.new_page()
+                try:
+                    dom_videos, dom_total = await _dom_fallback(
+                        uid, seen_bvids, pg, progress_callback, task_id=task_id)
+                finally:
+                    await pg.close()
+        except Exception as e:
+            logger.warning("DOM代理尝试失败 uid=%s: %s", uid, str(e)[:80])
+
+        # 尝试2: headful 直连
+        if not dom_videos:
             try:
-                dom_videos, dom_total = await _dom_fallback(
-                    uid, seen_bvids, direct_pg, progress_callback, task_id=task_id)
-            finally:
-                await direct_pg.close()
-                await direct_ctx.close()
-            for v in dom_videos:
-                videos.append(v)
-            total_count = dom_total or 0
-            if len(videos) > 0:
-                errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
-            else:
-                errors.append("API+DOM均未提取到视频")
-        except Exception as e2:
-            logger.error("直连 DOM 兜底也失败 uid=%s: %s", uid, e2)
-            errors.append("DOM兜底失败")
+                direct_ctx = await browser_pool.create_direct_context()
+                direct_pg = await direct_ctx.new_page()
+                try:
+                    dom_videos, dom_total = await _dom_fallback(
+                        uid, seen_bvids, direct_pg, progress_callback, task_id=task_id)
+                finally:
+                    await direct_pg.close()
+                    await direct_ctx.close()
+            except Exception as e2:
+                logger.warning("DOM直连尝试失败 uid=%s: %s", uid, str(e2)[:80])
+
+        for v in dom_videos:
+            videos.append(v)
+        total_count = dom_total or 0
+        if len(videos) > 0:
+            errors.append(f"DOM提取 {len(videos)}/{total_count} 条")
+        else:
+            errors.append("API+DOM均未提取到视频")
         return {"videos": videos, "total_count": total_count, "errors": errors,
                 "status": _pick_status(errors, len(videos) > 0)}
 
