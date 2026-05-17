@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed, get_random_ua
+from backend.crawler.anti_detect import random_delay, report_page_and_rotate, rotate_proxy_if_needed
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
@@ -178,6 +178,7 @@ async def scrape_video_comments(
     SESSION_PAGES = 3  # 每 3 页轮换 context (换 IP + cookie), 防风控
 
     pn = 1
+    session_failures = 0
     while pn <= api_pages:
         session_end = min(pn + SESSION_PAGES, api_pages + 1)
 
@@ -198,9 +199,14 @@ async def scrape_video_comments(
                         await pg.wait_for_timeout(2000)
 
                 if not mixin_key:
-                    logger.warning("mixin_key 获取失败 bv=%s, 强制换代理重试", bv_id)
-                    await rotate_proxy_if_needed()  # 当前节点坏了, 立即换
+                    session_failures += 1
+                    if session_failures >= 3:
+                        logger.warning("mixin_key 连续失败 %d 次 bv=%s, 放弃评论采集", session_failures, bv_id)
+                        return comments, 0
+                    logger.warning("mixin_key 获取失败 bv=%s, 强制换代理重试 (%d/3)", bv_id, session_failures)
+                    await rotate_proxy_if_needed()
                     continue
+                session_failures = 0  # 成功后重置
 
                 for _pn in range(pn, session_end):
                     if _pn > 1:

@@ -138,6 +138,7 @@ async def recover_pending_tasks(dispatcher=None) -> int:
                 else:
                     task.status = TaskStatus.COMPLETED.value
                 task.updated_at = datetime.now()
+                await session.commit()
                 continue
 
             urls_to_queue = []

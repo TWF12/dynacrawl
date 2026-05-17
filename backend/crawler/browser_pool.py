@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
-from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed
+from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed, EXTRA_HTTP_HEADERS
 from backend.crawler.cookie_manager import cookie_manager
 
 logger = logging.getLogger(__name__)
@@ -106,12 +106,7 @@ class BrowserPool:
             # 无 proxy, 无 storage_state → 直连 + 无登录态
         )
         await apply_stealth(context)
-        await context.set_extra_http_headers({
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-            "Sec-Ch-UA-Platform": '"Windows"',
-        })
+        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
         return context
 
     async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
@@ -131,12 +126,7 @@ class BrowserPool:
         cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
         # context 级别浏览器伪装头, 所有新 page 自动继承
-        await context.set_extra_http_headers({
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-            "Sec-Ch-UA-Platform": '"Windows"',
-        })
+        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
         return context
 
     async def stop(self):
@@ -182,12 +172,7 @@ class BrowserPool:
         )
         cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
-        await context.set_extra_http_headers({
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-            "Sec-Ch-UA-Platform": '"Windows"',
-        })
+        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
         self._contexts.append(context)
         return context
 

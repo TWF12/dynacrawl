@@ -144,6 +144,8 @@ async def process_url_message(
                     video_count=api_total or total_videos[0] or len(videos),
                 ))
 
+        elif url_type == "video_comments":
+            pass  # 由下方独立代码块处理, 不占 acquire_page 的 semaphore
         else:
             async with browser_pool.acquire_page() as page:
                 if url_type == "up_api":
@@ -184,10 +186,7 @@ async def process_url_message(
                             raw_data=result.get("raw_data"),
                         ))
 
-                elif url_type == "video_comments":
-                    pass  # video_comments 移出, 见下方
-
-        # video_comments 独立处理: headful context + WBI 签名 (同 arc/search 模式)
+        # video_comments 独立处理 (不占 acquire_page semaphore)
         if url_type == "video_comments":
             bv = msg.get("bv_id", "")
             aid = None

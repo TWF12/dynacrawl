@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, EXTRA_HTTP_HEADERS
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -384,7 +384,7 @@ def _progressive_delay(pn: int, total_pages: int) -> float:
         return random.uniform(5, 12)
 
 
-async def _init_session(ctx, uid: str) -> str | None:
+async def _init_session(ctx) -> str | None:
     """为新 session 获取 mixin_key。异常(代理超时等)返回 None, 由调用方走 DOM 兜底"""
     pg = await ctx.new_page()
     try:
@@ -431,7 +431,7 @@ async def scrape_up_videos(
     phase1_ok = False
     try:
         async with browser_pool.acquire_headful_context(rotate=False) as ctx:
-            mixin_key = await _init_session(ctx, uid)
+            mixin_key = await _init_session(ctx)
             if not mixin_key:
                 logger.warning("WBI密钥失败 uid=%s, 直连 headful DOM 兜底", uid)
                 errors.append("WBI密钥失败")
@@ -562,7 +562,7 @@ async def scrape_up_videos(
             break
 
         async with browser_pool.acquire_headful_context(rotate=False) as ctx:
-            mixin_key = await _init_session(ctx, uid)
+            mixin_key = await _init_session(ctx)
             if not mixin_key:
                 # proxy 大概率坏了, 立即 DOM 兜底不重试
                 logger.warning("WBI密钥失败, 剩余 %d 页用直连 headful DOM 兜底", total_pages - current_pn + 1)
@@ -743,14 +743,10 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
     referer = f"https://space.bilibili.com/{uid}/upload/video"
 
     async def _do_fetch():
-        await page.set_extra_http_headers({
-            "Referer": referer,
-            "Origin": "https://space.bilibili.com",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-            "Sec-Ch-UA-Platform": '"Windows"',
-        })
+        page_headers = dict(EXTRA_HTTP_HEADERS)
+        page_headers["Referer"] = referer
+        page_headers["Origin"] = "https://space.bilibili.com"
+        await page.set_extra_http_headers(page_headers)
         resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if resp and resp.ok:
             text = await page.evaluate("() => document.body.innerText")

@@ -9,6 +9,14 @@ from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 logger = logging.getLogger(__name__)
 
+# 浏览器伪装 HTTP 头 — 统一常量, 避免在多处重复定义
+EXTRA_HTTP_HEADERS = {
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
+    "Sec-Ch-UA-Platform": '"Windows"',
+}
+
 USER_AGENTS = [
     # Chrome 132-135 Windows
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
@@ -122,11 +130,15 @@ _PROXY_ROTATE_THRESHOLD = 10  # 每 10 页换一次 IP
 async def report_page_and_rotate() -> int:
     """每成功爬完一页调用, 累计达到阈值时自动轮换代理。返回总页数"""
     global _total_proxy_pages
+    need_rotate = False
     async with _clash_lock:
         _total_proxy_pages += 1
         if _total_proxy_pages >= _PROXY_ROTATE_THRESHOLD:
+            need_rotate = True
+    if need_rotate:
+        await _rotate_clash_proxy()  # _rotate_clash_proxy 内部持有 _clash_lock, 不能嵌套
+        async with _clash_lock:
             _total_proxy_pages = 0
-            await _rotate_clash_proxy()
     return _total_proxy_pages
 
 
@@ -152,7 +164,8 @@ def _clash_put(path: str, body: dict) -> None:
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="PUT")
-    urllib.request.urlopen(req, timeout=5)
+    with urllib.request.urlopen(req, timeout=5):
+        pass
 
 
 def _clash_exit_ip() -> str:
@@ -301,12 +314,7 @@ async def setup_page(page: Page):
     w = random.randint(1400, 1920)
     h = random.randint(800, 1080)
     await page.set_viewport_size({"width": w, "height": h})
-    await page.set_extra_http_headers({
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-        "Sec-Ch-UA-Platform": '"Windows"',
-    })
+    await page.set_extra_http_headers(EXTRA_HTTP_HEADERS)
 
 
 # 任务取消标记 (供 dispatcher 设置, scraper 检查, 避免循环导入)
