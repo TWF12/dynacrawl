@@ -5,6 +5,7 @@ import logging
 import asyncio
 from urllib.parse import urlparse
 from playwright.async_api import BrowserContext, Page
+from playwright_stealth import Stealth
 from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 logger = logging.getLogger(__name__)
@@ -34,86 +35,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:136.0) Gecko/20100101 Firefox/136.0",
 ]
-
-# 浏览器指纹隐身脚本
-STEALTH_SCRIPT = """
-// webdriver 检测
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-delete navigator.__proto__.webdriver;
-
-// chrome runtime
-window.chrome = {
-    runtime: {},
-    loadTimes: function() {},
-    csi: function() {},
-    app: {}
-};
-
-// permissions
-const origQuery = window.navigator.permissions.query;
-window.navigator.permissions.query = (parameters) => (
-    parameters.name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission, onchange: null }) :
-        origQuery(parameters)
-);
-
-// plugins
-Object.defineProperty(navigator, 'plugins', {
-    get: () => {
-        const arr = [];
-        arr.item = () => null; arr.namedItem = () => null; arr.refresh = () => {};
-        arr[0] = { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 };
-        arr[1] = { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 };
-        arr[2] = { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 };
-        Object.defineProperty(arr, 'length', { get: () => 3 });
-        return arr;
-    }
-});
-Object.defineProperty(navigator, 'mimeTypes', {
-    get: () => {
-        const arr = [];
-        arr.item = () => null; arr.namedItem = () => null;
-        arr[0] = { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
-        arr[1] = { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
-        Object.defineProperty(arr, 'length', { get: () => 2 });
-        return arr;
-    }
-});
-
-// locale
-Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en-US', 'en'] });
-Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' });
-Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
-
-// hardware
-Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => [4,6,8,12,16][Math.floor(Math.random()*5)] });
-Object.defineProperty(navigator, 'deviceMemory', { get: () => [4,8,8,16,16][Math.floor(Math.random()*5)] });
-Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
-Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
-
-// canvas fingerprint noise
-const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-HTMLCanvasElement.prototype.toDataURL = function(type) {
-    const ctx = this.getContext('2d');
-    if (ctx) {
-        const imgData = ctx.getImageData(0, 0, 1, 1);
-        if (imgData && imgData.data) {
-            imgData.data[0] = imgData.data[0] ^ 1;
-            ctx.putImageData(imgData, 0, 0);
-        }
-    }
-    return origToDataURL.apply(this, arguments);
-};
-
-// webgl fingerprint noise
-const origGetParameter = WebGLRenderingContext.prototype.getParameter;
-WebGLRenderingContext.prototype.getParameter = function(p) {
-    if (p === 37445) return 'Intel Inc.';
-    if (p === 37446) return 'Intel Iris OpenGL Engine';
-    return origGetParameter.call(this, p);
-};
-"""
-
 
 # Clash 代理自动轮换
 CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090")
@@ -306,8 +227,11 @@ async def rotate_proxy_if_needed() -> str | None:
     return None
 
 
+_stealth = Stealth()
+
 async def apply_stealth(context: BrowserContext):
-    await context.add_init_script(STEALTH_SCRIPT)
+    """playwright-stealth: 自动对新 page 注入隐身 (覆盖 webdriver/webgl/canvas 等)"""
+    context.on('page', lambda page: asyncio.create_task(_stealth.apply_stealth_async(page)))
 
 
 async def setup_page(page: Page):
