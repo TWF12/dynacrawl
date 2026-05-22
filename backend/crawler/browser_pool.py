@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
-from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed, EXTRA_HTTP_HEADERS
+from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed, make_browser_fingerprint
 from backend.crawler.cookie_manager import cookie_manager
 
 logger = logging.getLogger(__name__)
@@ -98,26 +98,26 @@ class BrowserPool:
     async def create_direct_context(self) -> BrowserContext:
         """创建无代理无cookie的 headful 直连 context (不走 semaphore, 供嵌套调用)"""
         await self._ensure_headful_browser()
-        ua = get_random_ua()
+        fp = make_browser_fingerprint()
         context = await self._headful_browser.new_context(
-            user_agent=ua,
+            user_agent=fp["user_agent"],
             viewport={"width": 1920, "height": 1080},
             locale="zh-CN",
             # 无 proxy, 无 storage_state → 直连 + 无登录态
         )
         await apply_stealth(context)
-        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
+        await context.set_extra_http_headers(fp["extra_headers"])
         return context
 
     async def _new_headful_context(self, rotate: bool = True) -> BrowserContext:
         """创建已配置隐身 + cookie 的头有 context, rotate=False 时不轮换IP"""
         if rotate:
             await rotate_proxy_if_needed()
-        ua = get_random_ua()
+        fp = make_browser_fingerprint()
         proxy = get_random_proxy()
         storage, filepath = await cookie_manager.get_next()
         context = await self._headful_browser.new_context(
-            user_agent=ua,
+            user_agent=fp["user_agent"],
             viewport={"width": 1920, "height": 1080},
             locale="zh-CN",
             proxy=proxy,
@@ -125,8 +125,7 @@ class BrowserPool:
         )
         cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
-        # context 级别浏览器伪装头, 所有新 page 自动继承
-        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
+        await context.set_extra_http_headers(fp["extra_headers"])
         return context
 
     async def stop(self):
@@ -162,17 +161,17 @@ class BrowserPool:
 
     async def _create_context(self) -> BrowserContext:
         await rotate_proxy_if_needed()
-        ua = get_random_ua()
+        fp = make_browser_fingerprint()
         proxy = get_random_proxy()
         storage, filepath = await cookie_manager.get_next()
         context = await self._browser.new_context(
-            user_agent=ua, viewport={"width": 1920, "height": 1080}, locale="zh-CN",
+            user_agent=fp["user_agent"], viewport={"width": 1920, "height": 1080}, locale="zh-CN",
             proxy=proxy,
             storage_state=storage,
         )
         cookie_manager.register_context(context, filepath)
         await apply_stealth(context)
-        await context.set_extra_http_headers(EXTRA_HTTP_HEADERS)
+        await context.set_extra_http_headers(fp["extra_headers"])
         self._contexts.append(context)
         return context
 

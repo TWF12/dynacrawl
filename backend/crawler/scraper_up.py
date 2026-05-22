@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, EXTRA_HTTP_HEADERS
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, report_proxy_success, report_proxy_failure
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -743,10 +743,11 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
     referer = f"https://space.bilibili.com/{uid}/upload/video"
 
     async def _do_fetch():
-        page_headers = dict(EXTRA_HTTP_HEADERS)
-        page_headers["Referer"] = referer
-        page_headers["Origin"] = "https://space.bilibili.com"
-        await page.set_extra_http_headers(page_headers)
+        # 先访问 referer 页面设置自然 Referer, 避免 page.set_extra_http_headers 覆盖 context headers
+        try:
+            await page.goto(referer, timeout=10000, wait_until="domcontentloaded")
+        except Exception:
+            pass  # referer 页面加载失败也不影响后续 API 调用
         resp = await page.goto(api_url, timeout=PAGE_TIMEOUT, wait_until="domcontentloaded")
         if resp and resp.ok:
             text = await page.evaluate("() => document.body.innerText")
@@ -762,6 +763,7 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
 
         code = data.get("code")
         if code == 0 and isinstance(data.get("data"), dict):
+            report_proxy_success()
             return data["data"], False
 
         logger.warning("arc/search pn=%d code=%d msg=%s",
@@ -784,6 +786,7 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
         return None, False
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
+        report_proxy_failure()
         return None, False
 
 
