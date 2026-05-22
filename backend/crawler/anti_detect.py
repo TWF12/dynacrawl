@@ -5,7 +5,7 @@ import logging
 import asyncio
 from urllib.parse import urlparse
 from playwright.async_api import BrowserContext, Page
-from playwright_stealth import Stealth
+from pw_stealth_enhanced import apply_stealth as _stealth_apply, StealthConfig
 from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 logger = logging.getLogger(__name__)
@@ -220,11 +220,15 @@ async def rotate_proxy_if_needed() -> str | None:
     return None
 
 
-_stealth = Stealth()
+_stealth_config = StealthConfig(
+    locale="zh-CN",
+    timezone_id="Asia/Shanghai",
+    accept_language="zh-CN,zh;q=0.9,en;q=0.8",
+)
 
 async def apply_stealth(context: BrowserContext):
-    """playwright-stealth: 自动对新 page 注入隐身 (覆盖 webdriver/webgl/canvas 等)"""
-    context.on('page', lambda page: asyncio.create_task(_stealth.apply_stealth_async(page)))
+    """pw-stealth-enhanced: 注入 Canvas/WebGL/AudioContext/字体等 30+ 检测点隐身"""
+    await _stealth_apply(context, config=_stealth_config)
 
 
 async def setup_page(page: Page):

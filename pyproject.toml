@@ -12,8 +12,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "redis>=5.0.0",
     "python-multipart>=0.0.20",
-    "playwright-stealth>=2.0.3",
     "browserforge>=1.2.4",
+    "pw-stealth-enhanced>=0.1.0",
 ]
 
 
