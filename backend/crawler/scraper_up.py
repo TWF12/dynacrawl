@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, report_proxy_success, report_proxy_failure
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, report_proxy_success, report_proxy_failure, human_scroll, human_dwell
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 VideoProgressCallback = Callable[[int, int, str], Awaitable[None]]
 
 
-async def _make_direct_page(from_page: Page = None):
+async def _make_direct_page():
     """创建无代理直连 headful page (DOM 兜底专用, 不走 pool semaphore)"""
     ctx = await browser_pool.create_direct_context()
     pg = await ctx.new_page()
@@ -266,17 +266,6 @@ async def _dom_extract(page: Page, uid: str, seen_bvids: set) -> list[dict]:
         return []
 
 
-async def _dom_scroll_for_more(page: Page, max_scrolls: int = 10) -> int:
-    """滚动页面触发懒加载，返回滚动后新增的可见链接数"""
-    before = await page.evaluate(
-        "document.querySelectorAll('a[href*=\"/video/BV\"]').length")
-    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    await asyncio.sleep(2)
-    after = await page.evaluate(
-        "document.querySelectorAll('a[href*=\"/video/BV\"]').length")
-    return after - before
-
-
 async def _dom_fallback(uid: str, seen_bvids: set, page,
                        progress_callback=None, start_pn: int = 1,
                        max_pages: int = 0, task_id: str = "") -> tuple[list[dict], int]:
@@ -338,8 +327,8 @@ async def _dom_fallback(uid: str, seen_bvids: set, page,
                 await _extract_and_report(1)
                 for scroll_i in range(min(max_pages or 30, 50)):
                     before = len(all_videos)
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(random.randint(2000, 4000))
+                    await human_scroll(page, random.randint(400, 900))
+                    await human_dwell(page, random.uniform(0.5, 1.5))
                     await _extract_and_report(scroll_i + 2)
                     if len(all_videos) == before:
                         logger.info("滚动无新内容 uid=%s scroll=%d total=%d", uid, scroll_i, len(all_videos))

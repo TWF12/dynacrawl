@@ -299,6 +299,11 @@ def is_task_cancelled(task_id: str) -> bool:
     return task_id in _cancelled_tasks
 
 
+def clear_cancelled_task(task_id: str):
+    """任务完成/删除时清理取消标记, 防止内存泄漏"""
+    _cancelled_tasks.discard(task_id)
+
+
 async def random_delay():
     delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
     await asyncio.sleep(delay)

@@ -11,6 +11,7 @@ from backend.models import UrlRecord, Task, UpInfo, VideoInfo, Comment
 from backend.schemas import TaskStatus
 from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
+from backend.crawler.anti_detect import clear_cancelled_task
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ async def process_url_message(
     task = await session.get(Task, task_id)
     if not task:
         logger.info("任务 %s 已删除, 跳过 URL %s", task_id, url_id)
+        clear_cancelled_task(task_id)
         return
 
     # 首次被 consumer 拾取, 切为运行中
@@ -290,6 +292,7 @@ async def process_url_message(
             task.updated_at = datetime.now()
 
         await session.commit()
+        clear_cancelled_task(task_id)
 
         if progress_callback and task:
             scraper_status = result.get("status", "ok") if isinstance(result, dict) else "ok"
@@ -305,6 +308,7 @@ async def process_url_message(
         task_exists = await session.get(Task, task_id)
         if not task_exists:
             logger.info("任务 %s 已删除, 跳过错误处理", task_id)
+            clear_cancelled_task(task_id)
             return
         try:
             url_record = await session.get(UrlRecord, url_id)
