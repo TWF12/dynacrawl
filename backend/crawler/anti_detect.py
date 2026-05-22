@@ -10,16 +10,22 @@ from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 
 logger = logging.getLogger(__name__)
 
-# 浏览器伪装 HTTP 头 — 统一常量, 避免在多处重复定义
-EXTRA_HTTP_HEADERS = {
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Sec-Ch-UA": '"Chromium";v="134", "Not=A?Brand";v="24"',
-    "Sec-Ch-UA-Platform": '"Windows"',
-}
+from browserforge.headers import HeaderGenerator
+_header_gen = HeaderGenerator(browser='chrome', os='windows', device='desktop')
 
-from fake_useragent import UserAgent as UAGen
-_ua = UAGen(browsers=['chrome', 'edge'], platforms=['pc'], fallback='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36')
+# 动态生成版本匹配的 headers (UA + Sec-CH-UA 版本号一致)
+def _make_headers() -> dict:
+    h = _header_gen.generate()
+    return {
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Accept": h.get("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"),
+        "Sec-Ch-UA": h.get("sec-ch-ua", '"Chromium";v="140", "Not=A?Brand";v="24"'),
+        "Sec-Ch-UA-Platform": '"Windows"',
+        "User-Agent": h.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"),
+    }
+
+# 浏览器伪装 HTTP 头 — UA 与 Sec-CH-UA 版本号一致
+EXTRA_HTTP_HEADERS = _make_headers()
 
 # Clash 代理自动轮换
 CLASH_CONTROLLER = os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090")
@@ -162,8 +168,9 @@ async def _rotate_clash_proxy() -> str | None:
 
 
 def get_random_ua() -> str:
-    """fake-useragent: 自动更新的 Chrome/Edge UA 数据库, 无需手动维护版本号"""
-    return _ua.random
+    """browserforge: UA 与 Sec-CH-UA 版本号一致, 无手动维护"""
+    return _header_gen.generate().get("User-Agent", "")
+
 
 
 # 代理选择与轮换 — 支持 Clash API 和普通代理列表两种模式
