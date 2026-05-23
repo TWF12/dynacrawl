@@ -7,7 +7,7 @@ DynaCrawl —— 基于 Playwright + FastAPI + asyncio 的 B 站动态爬虫数�
 - 两个采集场景：UP主信息（UID → 头像/粉丝数/视频BV号/播放量）、视频详情（BV号 → 标题/播放量/点赞/评论）
 - 支持断点续采、WebSocket 实时进度、CSV/JSON 导出、自动 session 轮换防风控
 - 全链路 asyncio，零阻塞调用
-- 内置 8 层反爬机制（浏览器指纹/HTTP头/IP轮换/Session轮换/渐进延迟/WBI签名/DOM兜底）
+- 内置多层反爬机制（浏览器指纹/HTTP头/IP轮换/Session轮换/渐进延迟/WBI签名/DOM兜底/行为拟人）
 
 ## 环境与运行
 
@@ -20,9 +20,6 @@ uv run python save_cookie.py
 
 # 启动服务
 uv run python run.py
-
-# 带热重载
-uv run python run.py --reload
 ```
 
 **仅使用 uv 管理虚拟环境**，不依赖全局 Python，不依赖 pip/pipx。
@@ -32,7 +29,7 @@ uv run python run.py --reload
 ```
 backend/
 ├── main.py              # FastAPI 入口 + lifespan + 启动配置检查
-├── config.py            # 全局配置（25 个环境变量）
+├── config.py            # 全局配置（环境变量）
 ├── database.py          # SQLAlchemy async engine + session
 ├── models.py            # 5张表：Task / UrlRecord / UpInfo / VideoInfo / Comment
 ├── schemas.py           # Pydantic 请求/响应模型
@@ -41,17 +38,17 @@ backend/
 │   ├── results.py       # CSV/JSON 导出 API
 │   └── ws.py            # WebSocket 进度推送 + ConnectionManager
 ├── services/
-│   ├── task_service.py  # 任务生命周期、URL 生成、断点恢复（含旧数据清理）
+│   ├── task_service.py  # 任务生命周期、URL 生成、断点恢复
 │   └── export_service.py# CSV/JSON 导出逻辑
 ├── crawler/
 │   ├── browser_pool.py     # 浏览器池（headless + headful 双模式，Semaphore 控并发）
 │   ├── cookie_manager.py   # Cookie 管理器（多文件轮换 + 过期检测 + 自动删除）
-│   ├── anti_detect.py      # UA/视口/指纹隐身 + Clash代理轮换 + 普通代理列表轮换
+│   ├── anti_detect.py      # 隐身/UA/代理/行为拟人/全局IP轮换（核心反爬模块）
 │   ├── scraper_up.py    # UP主数据爬取（API优先→DOM兜底，Session轮换+渐进延迟）
-│   ├── scraper_video.py # 视频数据爬取（API优先→页面降级）
+│   ├── scraper_video.py # 视频数据爬取（API优先→DOM兜底+评论采集）
 │   ├── wbi_sign.py      # B站 WBI 签名（img_key + sub_key 混排 → MD5 w_rid）
-│   ├── url_processor.py # URL 处理逻辑（进度回调 + 错误处理 + 重试）
-│   └── dispatcher.py    # 任务调度器（MemoryQueue / RedisQueue 双模式）
+│   ├── url_processor.py # URL 处理 + 进度回调 + 错误处理 + 自动重试
+│   └── dispatcher.py    # 任务调度器（内存队列 / Redis 双模式）
 └── worker/
     └── consumer.py      # 独立 Worker 进程（Redis 模式专用）
 
@@ -63,67 +60,73 @@ frontend/
 
 **核心数据流：** 用户提交 → TaskService 生成 URL → Dispatcher 推入队列 → url_processor 从 BrowserPool 获取页面 → 爬虫执行 → 结果写入 DB → WebSocket 推送进度。
 
-## 关键设计
+## 反爬机制
 
-### 浏览器管理
+### 浏览器隐身
 
-- **Cookie 多账号轮换**：`CookieManager` 管理 `data/cookies/` 目录，启动时验证有效性，运行时遇 -101 自动删除切换
-- **双浏览器实例**：headless（视频详情用）+ headful（UP主采集用，绕过 B站 -352 检测）
-- headful 浏览器最小化并移到屏幕外（`--start-minimized`, `--window-position=-32000,-32000`）
-- Context 级别设置浏览器伪装头（Accept-Language/Accept/Sec-Ch-UA），所有新 page 自动继承
-- 每个 context 创建时注入隐身脚本（STEALTH_SCRIPT）+ 随机 UA + 登录 Cookie
+- **pw-stealth-enhanced**（官方维护）：覆盖 Canvas/WebGL/AudioContext/字体枚举等 30+ 检测点，通过 CDP 注入
+- **browserforge**：动态生成 UA 和 Sec-CH-UA headers，版本号始终匹配
+- 每个 browser context 独立指纹（`make_browser_fingerprint()` 统一生成）
+- headful 浏览器强制使用（B站对 headless 返回空壳 HTML）
+- headful 最小化并移到屏幕外（`--start-minimized`, `--window-position=-32000,-32000`）
 
 ### 代理轮换
 
-- **双模式**：Clash API（优先）→ 普通 PROXY_LIST 轮换（兜底）→ 无代理（直连，仅测试用）
-- 每次创建新 browser context 时触发轮换
-- Clash 模式：通过 REST API 切换代理组内上游节点，验证出口 IP 后日志确认
-- 普通模式：从 PROXY_LIST 中选一个与当前不同的代理地址
+- **双模式**：Clash API（优先）→ 普通 PROXY_LIST 轮换（兜底）
+- **全局统一 IP 轮换**：所有任务共享 IP，每 10 页总阈值触发一次切换
+- **节点质量评分**：成功 +1 / 失败 -2，低于 -3 分跳过，加权随机选高分节点
 - 并发切换保护：`asyncio.Lock()`
 
-### Session 轮换（核心防风控）
+### Session 轮换
 
 - 每次 `async with acquire_headful_context()` 创建新 context → 新 Cookie + 新 IP
-- 间隔按总页数自适应：`<=20` 页不轮换，`>20` 页每 `~20%` 主动轮换一次（15-40 页）
-- 遇 B站 -352/-412 风控：立即关闭当前 session，重建后重试**同一页**
-- 非风控失败（网络/超时）：等 5-10s 重试同一页，仍失败才计入错误；连续 3 页失败切 session
-- `_init_session` 失败不断开循环，等 10-20s 后重试新 context（最多 3 次）
+- 按总页数自适应：`<=20` 页不轮换，`>20` 页每 `~20%` 主动轮换一次
+- 遇 B站 -352/-412 风控：等待 5-10s 重试，仍失败则切换 session
+- _init_session 失败：**立即走 DOM 兜底**，不再重试（代理坏了白等无意义）
 
 ### 渐进延迟
 
-按进度比例 `pn / max(total_pages, 20)` 缩放，小 UP 全程快，大 UP 越往后越慢：
+按进度比例缩放，小 UP 全程快，大 UP 越往后越慢：
 
 | 进度 | 延迟 |
 |------|------|
-| 0-15% | 3-8s |
-| 15-40% | 8-20s |
-| 40-70% | 15-35s |
-| 70-100% | 25-50s |
+| 0-15% | 1-3s |
+| 15-40% | 2-5s |
+| 40-70% | 3-8s |
+| 70-100% | 5-12s |
 
-基础延迟（非翻页场景）：3-8s 随机
+### 行为拟人化
+
+- **鼠标轨迹**：`human_mouse_move()` — 三次贝塞尔曲线 + 随机偏移 + 加速/减速
+- **滚动方式**：`human_scroll()` — 分段滚动 + 随机停顿（模拟人眼扫视）
+- **停留模拟**：`human_dwell()` — 微量鼠标移动 + 随机看不同位置 + 偶尔点击空白
+
+### DOM 兜底
+
+- API 全部失败时走 `/upload/video` 页面提取（登录墙下仍可见 navBar）
+- 双策略：视频列表分页 → 空间主页滚动
+- 双连接：先代理 → 后直连（任一连通即可）
+- 昵称/粉丝/视频数从 navBar + section header 精准提取
 
 ### WBI 签名
 
 - 从 `api.bilibili.com/x/web-interface/nav` 获取 `img_key` + `sub_key`
 - 按固定混排表重排提取 32 位 mixin_key
 - 所有 `arc/search` 请求拼接 `w_rid`（MD5）+ `wts`（时间戳）
-- 缓存 TTL：600s（10 分钟），跟随 B站 密钥轮换节奏
+- 缓存 TTL：600s（10 分钟）
 
-### 断点恢复
+## 断点恢复
 
 - 启动时扫描 `pending`/`running`/`failed` 状态的任务
 - 查找 `pending`/`processing`/`failed` 状态的 URL 重新入队
 - **已爬数据保留不删**，`scrape_up_videos` 通过 `existing_bvids` 跳过已有 BV
 - 根据已有视频数自动计算续爬起始页 `max(2, existing_count // 50 + 1)`
-- 全部已爬完则跳过不再重复采集
-- 重算 `task.completed_urls` / `task.failed_urls` 确保进度条准确
 
-### 错误处理
+## 错误处理
 
-- 异常消息精简：只取异常首行 + 限 200 字符
-- Scraper 错误文案统一短格式（如 "card异常" 而非 "card接口异常"）
-- url_processor 中拼接后 error_msg 限 120 字符，超出截断
-- 前端错误列宽 300px，配合 CSS ellipsis 显示
+- URL 失败后 3 级自动延迟重入队（5s → 15s → 1min），代理恢复后无需重启
+- 异常消息精简：常见 Playwright 错误映射为中文短语（如 "代理不通"/"超时"/"DNS失败"）
+- 任务取消标记在完成后自动清理，防止内存泄漏
 
 ## 配置要点
 
@@ -134,7 +137,6 @@ frontend/
 | `REQUEST_DELAY_MIN` | 3.0 | 基础请求最小延迟(秒) |
 | `REQUEST_DELAY_MAX` | 8.0 | 基础请求最大延迟(秒) |
 | `PAGE_TIMEOUT` | 30000 | 页面超时(毫秒) |
-| `MAX_RETRY` | 2 | 失败重试次数 |
 | `PROXY_LIST` | (空) | 代理列表，逗号分隔；留空从 Clash 获取 |
 | `CLASH_CONTROLLER` | http://127.0.0.1:9090 | Clash REST API |
 | `CLASH_PROXY` | http://127.0.0.1:7890 | Clash 代理端口 |
@@ -145,22 +147,25 @@ frontend/
 
 ## 注意事项
 
-- **Cookie 必须**：启动时检查，缺失会打印获取指引。无 Cookie 部分 API 限流或返回空数据。
-- **代理强烈建议**：无代理启动会打印警告。大规模采集直连必然触发风控。
-- **B站页面用 domcontentloaded**：B站页面有持续广告/统计请求，`networkidle` 永远等不到导致超时。
-- **前端无构建**：Vue 3 + Element Plus 全部 CDN 引入，无需 npm/Node.js。
-- **多任务并发**：`up_video_list` 不占 `acquire_page` semaphore 槽（仅占 headful context 1 槽），3 任务可真正并发。任务提交后保持 PENDING，consumer 拾取时才切 RUNNING。
-- **自动延迟重试**：URL 失败后 5 级递增延迟自动重入队 (5s→30s→2min→10min→30min)，代理恢复后无需重启即可续采。
-- **Windows 编码**：日志输出做了 GBK 兼容处理（`_safe_log`）。
+- **Cookie 必须**：无 Cookie 部分 API 限流或返回空数据，DOM 兜底可降级获取 UP 信息
+- **代理强烈建议**：无代理启动会打印警告，大规模采集直连必然触发风控
+- **B站页面用 domcontentloaded**：`networkidle` 因持续连接永不触发导致超时
+- **headful 是核心**：B站对 headless 返回空壳（0 个 BV 链接），UP 采集和 video_api 均使用 headful
+- **前端无构建**：Vue 3 + Element Plus 全部 CDN 引入，无需 npm/Node.js
+- **Windows 编码**：日志输出做了 GBK 兼容处理
+
+## 依赖库
+
+| 库 | 用途 | 说明 |
+|---|------|------|
+| `pw-stealth-enhanced` | 浏览器隐身 | playwright-stealth 官方继任者，30+ 检测点 |
+| `browserforge` | UA/Headers 动态生成 | 版本匹配，消除指纹破绽 |
+| `playwright` | 浏览器自动化 | headful Chromium |
+| `fastapi` | Web 框架 | API + WebSocket |
+| `sqlalchemy` | ORM | async + aiosqlite |
 
 ## 每次修改后必须同步
 
 - `git add` + `git commit`（中文，格式如 `fix: xxx` / `feat: xxx`）
-- 更新 `AGENTS.md`（本文档）—— 如果架构/配置/关键设计有变化
-- 更新 `README.md` —— 如果环境变量、用法、FAQ 有变化
-
-## 项目语言规范
-
-- 日常交流：简体中文
-- 代码注释：中文
-- Git Commit：中文，格式遵循 `fix:` / `feat:` / `docs:` / `refactor:`
+- 更新 `AGENTS.md`（本文档）—— 架构/配置/关键设计变化
+- 更新 `README.md` —— 环境变量、用法、FAQ 变化
