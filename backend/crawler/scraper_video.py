@@ -157,7 +157,7 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
 
 async def scrape_video_comments(
     page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0,
-    max_pages: int = 5, progress_callback=None,
+    max_pages: int = 17, progress_callback=None,
 ) -> tuple[list[dict], int]:
     """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
     comments = []
@@ -182,7 +182,7 @@ async def scrape_video_comments(
         logger.warning("无法获取 aid, 跳过评论采集 bv_id=%s", bv_id)
         return comments, 0
 
-    api_pages = min(max_pages, max(1, (comment_count + 99) // 100))
+    api_pages = min(max_pages, max(1, (comment_count + 29) // 30))
     SESSION_PAGES = 3  # 每 3 页轮换 context (换 IP + cookie), 防风控
 
     pn = 1
@@ -222,7 +222,7 @@ async def scrape_video_comments(
                         await pg.wait_for_timeout(int(delay * 1000))
 
                     try:
-                        params = {"oid": str(aid), "type": "1", "ps": "100", "pn": str(_pn), "sort": "2"}
+                        params = {"oid": str(aid), "type": "1", "ps": "30", "pn": str(_pn), "sort": "2"}
                         if mixin_key:
                             params = sign_params(params, mixin_key)
                         reply_url = f"https://api.bilibili.com/x/v2/reply/main?{urlencode(params)}"
@@ -253,8 +253,9 @@ async def scrape_video_comments(
                                     "%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0))
                                 ) if r.get("ctime") else "",
                             })
-                        # 最后一页不到 50 条说明到底了
-                        if len(replies) < 50:
+                        # 检测到底: cursor.is_end 或返回数 < 15 (B站 reply API 每页最多30条)
+                        cursor = data.get("data", {}).get("cursor", {})
+                        if cursor.get("is_end") or len(replies) < 15:
                             pn = api_pages + 1
                             break
 
