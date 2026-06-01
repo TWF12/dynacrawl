@@ -297,8 +297,9 @@ async def process_url_message(
                 ).all()
                 existing_comments = {(r[0], r[1]) for r in existing_rows}
 
+                session.expire_on_commit = False  # 评论实时保存后不使ORM对象过期
                 async def _save_comment_page(page_comments: list[dict]):
-                    """每页评论实时保存到DB, 支持前端实时渲染评论数"""
+                    """每页评论实时保存到DB"""
                     for c in page_comments:
                         key = (c.get("content", ""), c.get("username", ""))
                         if key not in existing_comments:
