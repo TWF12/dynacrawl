@@ -16,6 +16,7 @@ dependencies = [
     "pw-stealth-enhanced>=0.1.0",
     "pymupdf>=1.27.2.3",
     "black>=26.5.1",
+    "python-docx>=1.2.0",
 ]
 
 
