@@ -12,6 +12,7 @@ from backend.crawler.anti_detect import (
     random_delay,
     report_page_and_rotate,
     rotate_proxy_if_needed,
+    is_task_cancelled,
 )
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
 from backend.crawler.browser_pool import browser_pool
@@ -175,8 +176,10 @@ async def scrape_video_comments(
     comment_count: int = 0,
     max_pages: int = 34,
     progress_callback=None,
+    on_page_done=None,
+    task_id: str = "",
 ) -> tuple[list[dict], int]:
-    """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
+    """爬取视频评论(headful + WBI签名)。page=None 时自动创建 headful context"""
     comments = []
     api_pages = 0
 
@@ -207,6 +210,9 @@ async def scrape_video_comments(
     pn = 1
     session_failures = 0
     while pn <= api_pages:
+        if task_id and is_task_cancelled(task_id):
+            logger.info("任务 %s 已取消, 停止评论采集 (已采集 %d 条)", task_id, len(comments))
+            break
         session_end = min(pn + SESSION_PAGES, api_pages + 1)
 
         async with browser_pool.acquire_headful_context() as ctx:
@@ -312,6 +318,12 @@ async def scrape_video_comments(
                         # 全局统一轮换: 每页成功后计数, 达阈值时自动换 IP
                         await report_page_and_rotate()
 
+                        # 每页完成后实时保存 (支持前端实时渲染评论数)
+                        if on_page_done:
+                            try:
+                                await on_page_done(comments[-len(replies) :])
+                            except Exception:
+                                pass
                         if progress_callback:
                             await progress_callback(
                                 _pn,

@@ -286,14 +286,50 @@ async def process_url_message(
                 logger.warning("缺少 aid, 跳过评论采集 bv_id=%s", bv)
                 comments, pages = [], 0
             else:
+                # 查询已有评论用于断点续采去重
+                existing_comments = set()
+                existing_rows = (
+                    await session.execute(
+                        select(Comment.content, Comment.username).where(
+                            Comment.task_id == task_id, Comment.bv_id == bv
+                        )
+                    )
+                ).all()
+                existing_comments = {(r[0], r[1]) for r in existing_rows}
+
+                async def _save_comment_page(page_comments: list[dict]):
+                    """每页评论实时保存到DB, 支持前端实时渲染评论数"""
+                    for c in page_comments:
+                        key = (c.get("content", ""), c.get("username", ""))
+                        if key not in existing_comments:
+                            existing_comments.add(key)
+                            session.add(
+                                Comment(
+                                    task_id=task_id,
+                                    bv_id=c.get("bv_id", ""),
+                                    username=c.get("username", ""),
+                                    content=c.get("content", ""),
+                                    like_count=c.get("like_count"),
+                                    posted_at=c.get("posted_at"),
+                                )
+                            )
+                    await session.commit()
+
                 comments, pages = await scrape_video_comments(
                     None,
                     bv,
                     aid=aid,
                     comment_count=comment_count,
                     progress_callback=_comment_progress,
+                    on_page_done=_save_comment_page,
+                    task_id=task_id,
                 )
             for c in comments:
+                # 二次去重 (on_page_done已保存大部分, 这里兜底)
+                key = (c.get("content", ""), c.get("username", ""))
+                if key in existing_comments:
+                    continue
+                existing_comments.add(key)
                 session.add(
                     Comment(
                         task_id=task_id,
