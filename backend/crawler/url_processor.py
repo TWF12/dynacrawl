@@ -111,9 +111,9 @@ async def process_url_message(
                 if progress_callback:
                     await progress_callback(
                         task_id,
-                        0,
-                        0,
-                        0,
+                        task.completed_urls,
+                        task.total_urls,
+                        task.failed_urls,
                         f"视频采集: {message}",
                         video_current=current,
                         video_total=total,
@@ -243,9 +243,9 @@ async def process_url_message(
                 if progress_callback:
                     await progress_callback(
                         task_id,
-                        0,
-                        0,
-                        0,
+                        task.completed_urls,
+                        task.total_urls,
+                        task.failed_urls,
                         f"评论采集: {message}",
                         video_current=current,
                         video_total=total,
