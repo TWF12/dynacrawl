@@ -301,6 +301,10 @@ async def process_url_message(
                 async def _save_comment_page(page_comments: list[dict]):
                     """每页评论实时保存到DB"""
                     new_count = 0
+                    first = page_comments[0] if page_comments else {}
+                    first_key = (first.get("content", ""), first.get("username", ""))
+                    logger.info("评论保存: 收到 %d 条, 首条key已存在=%s, set大小=%d",
+                               len(page_comments), first_key in existing_comments, len(existing_comments))
                     for c in page_comments:
                         key = (c.get("content", ""), c.get("username", ""))
                         if key not in existing_comments:
