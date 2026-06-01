@@ -130,8 +130,8 @@ const app = createApp({
                             wsProgress.videoCurrent = d.video_current || 0;
                             wsProgress.videoTotal = d.video_total || 0;
                             wsProgress.videoPercent = d.video_total > 0 ? Math.round(d.video_current / d.video_total * 100) : 0;
+                            loadTaskDetail(d.task_id);  // 仅在查看当前任务时刷新详情(含评论列表)
                         }
-                        loadTaskDetail(d.task_id);
                         loadTasks();
                     }
                 } catch (e) { console.error("WS error:", e); }
