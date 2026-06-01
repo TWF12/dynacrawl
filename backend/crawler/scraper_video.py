@@ -250,8 +250,54 @@ async def scrape_video_comments(
                         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r.get("ctime", 0)))
                         if r.get("ctime") else ""
                     ),
+                    "rpid": r.get("rpid"),
+                    "rcount": r.get("rcount", 0),
                 })
-            logger.info("评论采集完成 bv=%s 共 %d 条", bv_id, len(comments))
+            root_count = len(comments)
+
+            # 采集子回复 (楼中楼) — 子回复 API 分页正常
+            sub_total = 0
+            for c in comments[:]:
+                rpid = c.get("rpid")
+                rcount = c.get("rcount", 0)
+                if not rpid or rcount <= 0:
+                    continue
+                for spn in range(1, min(4, (rcount + 19) // 20 + 1)):
+                    try:
+                        sub_params = {
+                            "oid": str(aid), "type": "1", "ps": "20",
+                            "pn": str(spn), "root": str(rpid),
+                        }
+                        sub_params = sign_params(sub_params, mixin_key)
+                        sub_url = f"https://api.bilibili.com/x/v2/reply/reply?{urlencode(sub_params)}"
+                        sub_resp = await pg.goto(sub_url, timeout=15000, wait_until="domcontentloaded")
+                        if not sub_resp or not sub_resp.ok:
+                            break
+                        sub_data = json.loads(await pg.evaluate("() => document.body.innerText"))
+                        if sub_data.get("code") != 0:
+                            break
+                        sub_replies = sub_data.get("data", {}).get("replies", []) or []
+                        for sr in sub_replies:
+                            comments.append({
+                                "bv_id": bv_id,
+                                "username": sr.get("member", {}).get("uname", ""),
+                                "content": sr.get("content", {}).get("message", ""),
+                                "like_count": sr.get("like", 0),
+                                "posted_at": (
+                                    time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(sr.get("ctime", 0)))
+                                    if sr.get("ctime") else ""
+                                ),
+                            })
+                            sub_total += 1
+                        if len(sub_replies) < 10:
+                            break
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                    except Exception:
+                        break
+            logger.info(
+                "评论采集完成 bv=%s 主评论 %d + 子回复 %d = %d 条",
+                bv_id, root_count, sub_total, len(comments),
+            )
             if progress_callback:
                 await progress_callback(1, 1, f"评论采集完成, 共 {len(comments)} 条")
         finally:
