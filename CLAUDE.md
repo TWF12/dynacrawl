@@ -28,8 +28,8 @@
 - 多轮监控：间隔递增检查，直到确认稳定
 
 ## 技术要点
-- B站反爬：WBI 签名（mixin_key）、headful 浏览器（headless 返回空壳）
-- 代理轮换：Clash API（Selector 优先于 URLTest）+ 全局统一 IP 轮换
+- B站反爬：pw-stealth-enhanced + browserforge 指纹隐身、headful 浏览器（headless 返回空壳）、WBI 签名
+- 代理：默认直连（国内最稳），可选 PROXY_LIST 自定义代理
 - DOM 兜底：`/upload/video` 页面（登录墙下仍可见 navBar）
 - Cookie 管理：`data/cookies/*.json`，`cookie_manager.py` 轮换
 
