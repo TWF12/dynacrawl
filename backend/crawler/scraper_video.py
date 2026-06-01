@@ -322,10 +322,7 @@ async def scrape_video_comments(
 
                         # 每页完成后实时保存 (支持前端实时渲染评论数)
                         if on_page_done:
-                            try:
-                                await on_page_done(comments[-len(replies) :])
-                            except Exception:
-                                pass
+                            await on_page_done(comments[-len(replies) :])
                         if progress_callback:
                             await progress_callback(
                                 _pn,

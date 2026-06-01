@@ -300,6 +300,7 @@ async def process_url_message(
                 session.expire_on_commit = False  # 评论实时保存后不使ORM对象过期
                 async def _save_comment_page(page_comments: list[dict]):
                     """每页评论实时保存到DB"""
+                    new_count = 0
                     for c in page_comments:
                         key = (c.get("content", ""), c.get("username", ""))
                         if key not in existing_comments:
@@ -314,7 +315,9 @@ async def process_url_message(
                                     posted_at=c.get("posted_at"),
                                 )
                             )
+                            new_count += 1
                     await session.commit()
+                    logger.info("评论保存: %d 条新增, 累计 %d 条", new_count, len(existing_comments))
 
                 comments, pages = await scrape_video_comments(
                     None,
