@@ -213,9 +213,14 @@ async def process_url_message(
                         f"评论采集: {message}",
                         video_current=current, video_total=total)
 
-            comments, pages = await scrape_video_comments(
-                None, bv, aid=aid, comment_count=comment_count,
-                progress_callback=_comment_progress)
+            if not aid:
+                # 缺少 aid 无法采集评论 (API 和 DOM 均未提取到)
+                logger.warning("缺少 aid, 跳过评论采集 bv_id=%s", bv)
+                comments, pages = [], 0
+            else:
+                comments, pages = await scrape_video_comments(
+                    None, bv, aid=aid, comment_count=comment_count,
+                    progress_callback=_comment_progress)
             for c in comments:
                 session.add(Comment(
                     task_id=task_id, bv_id=c.get("bv_id", ""),
@@ -226,7 +231,10 @@ async def process_url_message(
                 ))
             com_errors = []
             com_status = "ok"
-            if comment_count and len(comments) < comment_count:
+            if not aid:
+                com_errors.append("缺少aid, 无法采集评论")
+                com_status = "failed"
+            elif comment_count and len(comments) < comment_count:
                 com_errors.append(f"评论不全: {len(comments)}/{comment_count}")
                 com_status = "fallback" if len(comments) > 0 else "failed"
             elif len(comments) == 0 and comment_count == 0:

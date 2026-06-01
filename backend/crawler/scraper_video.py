@@ -97,9 +97,9 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
                         function() {
                             if (window.__INITIAL_STATE__) {
                                 var vd = window.__INITIAL_STATE__.videoData || {};
-                                return { title: vd.title || '', stat: vd.stat || {} };
+                                return { title: vd.title || '', stat: vd.stat || {}, aid: vd.aid, owner: vd.owner || {} };
                             }
-                            var r = { title: document.title||'', stat: {} };
+                            var r = { title: document.title||'', stat: {}, aid: null, owner: {} };
                             if (r.title.indexOf('_哔哩哔哩')>=0) r.title = r.title.split('_哔哩哔哩')[0];
                             return r;
                         }
@@ -116,9 +116,9 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
                     function() {
                         if (window.__INITIAL_STATE__) {
                             var vd = window.__INITIAL_STATE__.videoData || {};
-                            return { title: vd.title || '', stat: vd.stat || {} };
+                            return { title: vd.title || '', stat: vd.stat || {}, aid: vd.aid, owner: vd.owner || {} };
                         }
-                        var r = { title: document.title||'', stat: {} };
+                        var r = { title: document.title||'', stat: {}, aid: null, owner: {} };
                         if (r.title.indexOf('_哔哩哔哩')>=0) r.title = r.title.split('_哔哩哔哩')[0];
                         return r;
                     }
@@ -132,6 +132,14 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
             result["coin_count"] = stat.get("coin", 0)
             result["danmaku_count"] = stat.get("danmaku", 0)
             result["comment_count"] = stat.get("reply", 0)
+            aid = dom.get("aid")
+            if aid:
+                result["aid"] = aid
+            owner = dom.get("owner") or {}
+            if owner.get("mid"):
+                result["uid"] = str(owner["mid"])
+                result["author"] = owner.get("name", "")
+            result["raw_data"] = dom  # DOM 提取的原始数据, 供 video_comments 读取 aid
             if dom.get("title"):
                 errors.append("DOM提取")
             else:
