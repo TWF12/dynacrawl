@@ -44,8 +44,3 @@ uv run python run.py
 | `DATABASE_URL` | sqlite:///data/dynacrawl.db | 数据库 |
 
 全部配置见 `backend/config.py`，架构详情见 `AGENTS.md`。
-
-## 测试数据
-
-- 10 个 UP 主 UID：`1619759224` `456664753` `400999844` `2475977` `37974444` `688379639` `95228778` `66569167` `15773384` `8047632`
-- 10 个视频 BV：`BV1rSoLBWErZ` `BV1h29DBaEzL` `BV15C4y1Y71E` `BV1ZR96BLEif` `BV1b7411N798` `BV1MFokBkEzC` `BV1JBorBoEXh` `BV1wZ92BBEGV` `BV1LB4y1G7gG` `BV1YiaMzkEGz`
