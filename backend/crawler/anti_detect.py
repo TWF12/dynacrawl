@@ -105,8 +105,10 @@ async def setup_page(page: Page):
     await page.set_viewport_size({"width": w, "height": h})
 
 
+_last_clash_node = None  # 保留以兼容 report_proxy_success/failure (Clash 移除后不再更新)
+
 def report_proxy_success():
-    """API 调用成功时报告, 给当前节点+1分"""
+    """API 调用成功时报告 (保留接口兼容)"""
     global _last_clash_node
     if _last_clash_node:
         _proxy_scores[_last_clash_node] = _proxy_scores.get(_last_clash_node, 0) + 1
