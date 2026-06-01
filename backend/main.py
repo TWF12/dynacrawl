@@ -1,6 +1,7 @@
 """
 动态爬虫数据采集平台 - FastAPI 主入口
 """
+
 import sys
 import os
 import asyncio
@@ -21,11 +22,18 @@ from backend.config import USE_REDIS, REDIS_URL, BASE_DIR, PROXY_LIST
 from backend.crawler.cookie_manager import cookie_manager
 from backend.database import init_db, async_session
 from backend.crawler.browser_pool import browser_pool
-from backend.crawler.dispatcher import CrawlDispatcher, MemoryQueue, RedisQueue, set_dispatcher
+from backend.crawler.dispatcher import (
+    CrawlDispatcher,
+    MemoryQueue,
+    RedisQueue,
+    set_dispatcher,
+)
 from backend.routers import tasks, results, ws
 from backend.services import task_service
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 
@@ -80,7 +88,8 @@ async def lifespan(app: FastAPI):
         queue = MemoryQueue()
 
     dispatcher = CrawlDispatcher(
-        queue=queue, browser_pool=browser_pool,
+        queue=queue,
+        browser_pool=browser_pool,
         db_session_factory=async_session,
         progress_callback=ws.progress_callback,
     )
@@ -109,8 +118,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-                    allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(tasks.router)
 app.include_router(results.router)
@@ -119,6 +133,7 @@ app.include_router(ws.router)
 frontend_dir = BASE_DIR / "frontend"
 frontend_dir.mkdir(exist_ok=True)
 _no_cache_types = {".html", ".js", ".css"}
+
 
 @app.middleware("http")
 async def no_cache_static(request: Request, call_next):
@@ -130,12 +145,15 @@ async def no_cache_static(request: Request, call_next):
         response.headers["Expires"] = "0"
     return response
 
+
 app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"detail": exc.errors(), "message": "请求参数验证失败"})
+    return JSONResponse(
+        status_code=422, content={"detail": exc.errors(), "message": "请求参数验证失败"}
+    )
 
 
 @app.get("/")

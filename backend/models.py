@@ -27,17 +27,27 @@ class Task(Base):
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
-    url_records = relationship("UrlRecord", back_populates="task", cascade="all, delete-orphan")
-    up_infos = relationship("UpInfo", back_populates="task", cascade="all, delete-orphan")
-    video_infos = relationship("VideoInfo", back_populates="task", cascade="all, delete-orphan")
-    comments = relationship("Comment", back_populates="task", cascade="all, delete-orphan")
+    url_records = relationship(
+        "UrlRecord", back_populates="task", cascade="all, delete-orphan"
+    )
+    up_infos = relationship(
+        "UpInfo", back_populates="task", cascade="all, delete-orphan"
+    )
+    video_infos = relationship(
+        "VideoInfo", back_populates="task", cascade="all, delete-orphan"
+    )
+    comments = relationship(
+        "Comment", back_populates="task", cascade="all, delete-orphan"
+    )
 
 
 class UrlRecord(Base):
     __tablename__ = "url_records"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(
+        String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
     url = Column(String(1024), nullable=False)
     url_type = Column(String(20), nullable=False)
     status = Column(String(20), default="pending")
@@ -53,7 +63,9 @@ class UpInfo(Base):
     __tablename__ = "up_infos"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(
+        String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
     uid = Column(String(50), nullable=False)
     nickname = Column(String(255), nullable=True)
     avatar_url = Column(String(1024), nullable=True)
@@ -69,7 +81,9 @@ class VideoInfo(Base):
     __tablename__ = "video_infos"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(
+        String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
     bv_id = Column(String(50), nullable=False)
     title = Column(String(512), nullable=True)
     play_count = Column(Integer, nullable=True)
@@ -87,7 +101,9 @@ class Comment(Base):
     __tablename__ = "comments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    task_id = Column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(
+        String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False
+    )
     bv_id = Column(String(50), nullable=False)
     username = Column(String(255), nullable=True)
     content = Column(Text, nullable=True)

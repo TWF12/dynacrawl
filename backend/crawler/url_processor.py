@@ -41,8 +41,8 @@ def _fmt_error(e: Exception) -> str:
         if en in msg:
             return zh
     # 去掉 URL 和其他冗余
-    msg = re.sub(r'https?://\S+', '', msg)
-    msg = re.sub(r'Page\.goto:\s*', '', msg)
+    msg = re.sub(r"https?://\S+", "", msg)
+    msg = re.sub(r"Page\.goto:\s*", "", msg)
     msg = msg.strip()
     return msg[:50] if len(msg) > 50 else msg
 
@@ -95,30 +95,45 @@ async def process_url_message(
                 if not await session.get(Task, task_id):
                     return
                 for v in page_videos:
-                    session.add(VideoInfo(
-                        task_id=task_id, bv_id=v.get("bvid", ""),
-                        title=v.get("title", ""), play_count=v.get("play"),
-                        raw_data=v,
-                    ))
+                    session.add(
+                        VideoInfo(
+                            task_id=task_id,
+                            bv_id=v.get("bvid", ""),
+                            title=v.get("title", ""),
+                            play_count=v.get("play"),
+                            raw_data=v,
+                        )
+                    )
                 total_videos[0] = cumulative + len(page_videos)
                 await session.commit()
 
             async def _video_progress(current: int, total: int, message: str):
                 if progress_callback:
                     await progress_callback(
-                        task_id, 0, 0, 0,
+                        task_id,
+                        0,
+                        0,
+                        0,
                         f"视频采集: {message}",
-                        video_current=current, video_total=total,
+                        video_current=current,
+                        video_total=total,
                     )
 
             # 查询已有 BV 号用于断点续爬
-            existing_rows = (await session.execute(
-                select(VideoInfo.bv_id).where(VideoInfo.task_id == task_id)
-            )).scalars().all()
+            existing_rows = (
+                (
+                    await session.execute(
+                        select(VideoInfo.bv_id).where(VideoInfo.task_id == task_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
             existing_bvids = set(existing_rows)
 
             result = await scrape_up_videos(
-                None, msg.get("uid", ""),
+                None,
+                msg.get("uid", ""),
                 progress_callback=_video_progress,
                 on_page_done=_save_page,
                 task_id=task_id,
@@ -129,23 +144,31 @@ async def process_url_message(
 
             if not total_videos[0]:
                 for v in videos:
-                    session.add(VideoInfo(
-                        task_id=task_id, bv_id=v.get("bvid", ""),
-                        title=v.get("title", ""), play_count=v.get("play"),
-                        raw_data=v,
-                    ))
+                    session.add(
+                        VideoInfo(
+                            task_id=task_id,
+                            bv_id=v.get("bvid", ""),
+                            title=v.get("title", ""),
+                            play_count=v.get("play"),
+                            raw_data=v,
+                        )
+                    )
 
             up_result = await session.execute(
-                select(UpInfo).where(UpInfo.task_id == task_id))
+                select(UpInfo).where(UpInfo.task_id == task_id)
+            )
             up_info = up_result.scalars().first()
             if up_info:
                 if up_info.video_count == 0:
                     up_info.video_count = api_total or total_videos[0] or len(videos)
             else:
-                session.add(UpInfo(
-                    task_id=task_id, uid=msg.get("uid", ""),
-                    video_count=api_total or total_videos[0] or len(videos),
-                ))
+                session.add(
+                    UpInfo(
+                        task_id=task_id,
+                        uid=msg.get("uid", ""),
+                        video_count=api_total or total_videos[0] or len(videos),
+                    )
+                )
 
         elif url_type == "video_comments":
             pass  # 独立代码块处理
@@ -158,23 +181,27 @@ async def process_url_message(
                 finally:
                     await hf_page.close()
                 if result and (result.get("title") or result.get("raw_data")):
-                    session.add(VideoInfo(
-                        task_id=task_id, bv_id=result.get("bv_id", ""),
-                        title=result.get("title", ""),
-                        play_count=result.get("play_count"),
-                        like_count=result.get("like_count"),
-                        coin_count=result.get("coin_count"),
-                        danmaku_count=result.get("danmaku_count"),
-                        comment_count=result.get("comment_count"),
-                        raw_data=result.get("raw_data"),
-                    ))
+                    session.add(
+                        VideoInfo(
+                            task_id=task_id,
+                            bv_id=result.get("bv_id", ""),
+                            title=result.get("title", ""),
+                            play_count=result.get("play_count"),
+                            like_count=result.get("like_count"),
+                            coin_count=result.get("coin_count"),
+                            danmaku_count=result.get("danmaku_count"),
+                            comment_count=result.get("comment_count"),
+                            raw_data=result.get("raw_data"),
+                        )
+                    )
         else:
             async with browser_pool.acquire_page() as page:
                 if url_type == "up_api":
                     result = await scrape_up_info(page, msg.get("uid", ""))
                     if result:
                         up_existing = await session.execute(
-                            select(UpInfo).where(UpInfo.task_id == task_id))
+                            select(UpInfo).where(UpInfo.task_id == task_id)
+                        )
                         up_row = up_existing.scalars().first()
                         if up_row:
                             up_row.nickname = result.get("nickname", "")
@@ -185,14 +212,17 @@ async def process_url_message(
                             if result.get("raw_data"):
                                 up_row.raw_data = result.get("raw_data")
                         else:
-                            session.add(UpInfo(
-                                task_id=task_id, uid=result.get("uid", ""),
-                                nickname=result.get("nickname", ""),
-                                avatar_url=result.get("avatar_url", ""),
-                                follower_count=result.get("follower_count"),
-                                video_count=result.get("video_count"),
-                                raw_data=result.get("raw_data"),
-                            ))
+                            session.add(
+                                UpInfo(
+                                    task_id=task_id,
+                                    uid=result.get("uid", ""),
+                                    nickname=result.get("nickname", ""),
+                                    avatar_url=result.get("avatar_url", ""),
+                                    follower_count=result.get("follower_count"),
+                                    video_count=result.get("video_count"),
+                                    raw_data=result.get("raw_data"),
+                                )
+                            )
 
         # video_comments 独立处理 (不占 acquire_page semaphore)
         if url_type == "video_comments":
@@ -201,8 +231,9 @@ async def process_url_message(
             comment_count = 0
             vinfo_result = await session.execute(
                 select(VideoInfo).where(
-                    VideoInfo.task_id == task_id,
-                    VideoInfo.bv_id == bv))
+                    VideoInfo.task_id == task_id, VideoInfo.bv_id == bv
+                )
+            )
             vinfo = vinfo_result.scalars().first()
             if vinfo and vinfo.raw_data:
                 aid = vinfo.raw_data.get("aid")
@@ -210,9 +241,15 @@ async def process_url_message(
 
             async def _comment_progress(current: int, total: int, message: str):
                 if progress_callback:
-                    await progress_callback(task_id, 0, 0, 0,
+                    await progress_callback(
+                        task_id,
+                        0,
+                        0,
+                        0,
                         f"评论采集: {message}",
-                        video_current=current, video_total=total)
+                        video_current=current,
+                        video_total=total,
+                    )
 
             if not aid:
                 # aid 缺失: 尝试直接从 view API 获取 (video_api 可能尚未完成)
@@ -222,14 +259,24 @@ async def process_url_message(
                         aid_pg = await aid_ctx.new_page()
                         try:
                             view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv}"
-                            resp = await aid_pg.goto(view_url, timeout=15000, wait_until="domcontentloaded")
+                            resp = await aid_pg.goto(
+                                view_url, timeout=15000, wait_until="domcontentloaded"
+                            )
                             if resp and resp.ok:
-                                text = await aid_pg.evaluate("() => document.body.innerText")
+                                text = await aid_pg.evaluate(
+                                    "() => document.body.innerText"
+                                )
                                 data = json.loads(text)
                                 if data.get("code") == 0:
                                     aid = data["data"].get("aid")
-                                    comment_count = data["data"].get("stat", {}).get("reply", 0)
-                                    logger.info("view API 获取 aid=%s comment_count=%s", aid, comment_count)
+                                    comment_count = (
+                                        data["data"].get("stat", {}).get("reply", 0)
+                                    )
+                                    logger.info(
+                                        "view API 获取 aid=%s comment_count=%s",
+                                        aid,
+                                        comment_count,
+                                    )
                         finally:
                             await aid_pg.close()
                 except Exception as e2:
@@ -240,16 +287,23 @@ async def process_url_message(
                 comments, pages = [], 0
             else:
                 comments, pages = await scrape_video_comments(
-                    None, bv, aid=aid, comment_count=comment_count,
-                    progress_callback=_comment_progress)
+                    None,
+                    bv,
+                    aid=aid,
+                    comment_count=comment_count,
+                    progress_callback=_comment_progress,
+                )
             for c in comments:
-                session.add(Comment(
-                    task_id=task_id, bv_id=c.get("bv_id", ""),
-                    username=c.get("username", ""),
-                    content=c.get("content", ""),
-                    like_count=c.get("like_count"),
-                    posted_at=c.get("posted_at"),
-                ))
+                session.add(
+                    Comment(
+                        task_id=task_id,
+                        bv_id=c.get("bv_id", ""),
+                        username=c.get("username", ""),
+                        content=c.get("content", ""),
+                        like_count=c.get("like_count"),
+                        posted_at=c.get("posted_at"),
+                    )
+                )
             com_errors = []
             com_status = "ok"
             if not aid:
@@ -263,8 +317,12 @@ async def process_url_message(
             elif len(comments) == 0 and pages > 0:
                 com_errors.append("评论采集为空")
                 com_status = "failed"
-            result = {"comment_count": len(comments), "comment_pages": pages,
-                      "errors": com_errors, "status": com_status}
+            result = {
+                "comment_count": len(comments),
+                "comment_pages": pages,
+                "errors": com_errors,
+                "status": com_status,
+            }
 
         # 采集期间任务可能被删除(级联删除 URL 记录), expire 后重新检查
         session.expire_all()
@@ -285,31 +343,50 @@ async def process_url_message(
                 msg = "; ".join(scrape_errors)
                 url_record.error_msg = msg[:120] + "..." if len(msg) > 120 else msg
             # status 映射: ok→completed, fallback→partial, failed→failed
-            url_record.status = {"ok": "completed", "fallback": "partial", "failed": "failed"}.get(
-                scraper_status, "completed")
+            url_record.status = {
+                "ok": "completed",
+                "fallback": "partial",
+                "failed": "failed",
+            }.get(scraper_status, "completed")
 
         task = await session.get(Task, task_id)
         if task:
-            completed_count = (await session.execute(
-                select(func.count()).select_from(UrlRecord).where(
-                    UrlRecord.task_id == task_id, UrlRecord.status == "completed"))
+            completed_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(UrlRecord)
+                    .where(
+                        UrlRecord.task_id == task_id, UrlRecord.status == "completed"
+                    )
+                )
             ).scalar() or 0
-            partial_count = (await session.execute(
-                select(func.count()).select_from(UrlRecord).where(
-                    UrlRecord.task_id == task_id, UrlRecord.status == "partial"))
+            partial_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(UrlRecord)
+                    .where(UrlRecord.task_id == task_id, UrlRecord.status == "partial")
+                )
             ).scalar() or 0
-            failed_count = (await session.execute(
-                select(func.count()).select_from(UrlRecord).where(
-                    UrlRecord.task_id == task_id, UrlRecord.status == "failed"))
+            failed_count = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(UrlRecord)
+                    .where(UrlRecord.task_id == task_id, UrlRecord.status == "failed")
+                )
             ).scalar() or 0
 
             task.completed_urls = completed_count + partial_count + failed_count
             task.failed_urls = failed_count
 
-            all_done = (await session.execute(
-                select(func.count()).select_from(UrlRecord).where(
-                    UrlRecord.task_id == task_id,
-                    UrlRecord.status.in_(["pending", "processing"])))
+            all_done = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(UrlRecord)
+                    .where(
+                        UrlRecord.task_id == task_id,
+                        UrlRecord.status.in_(["pending", "processing"]),
+                    )
+                )
             ).scalar() or 0
             if all_done == 0:
                 if failed_count > 0:
@@ -324,11 +401,19 @@ async def process_url_message(
         clear_cancelled_task(task_id)
 
         if progress_callback and task:
-            scraper_status = result.get("status", "ok") if isinstance(result, dict) else "ok"
-            status_label = {"ok": "已完成", "fallback": "异常", "failed": "失败"}.get(scraper_status, "已完成")
+            scraper_status = (
+                result.get("status", "ok") if isinstance(result, dict) else "ok"
+            )
+            status_label = {"ok": "已完成", "fallback": "异常", "failed": "失败"}.get(
+                scraper_status, "已完成"
+            )
             await progress_callback(
-                task_id, task.completed_urls, task.total_urls, task.failed_urls,
-                f"{status_label}: {url_type}")
+                task_id,
+                task.completed_urls,
+                task.total_urls,
+                task.failed_urls,
+                f"{status_label}: {url_type}",
+            )
 
     except Exception as e:
         logger.error(f"{consumer_label}处理 URL {url_id} 失败: {e}")
@@ -352,34 +437,67 @@ async def process_url_message(
                     url_record.error_msg = _fmt_error(e)
                     msg["retry_count"] = new_retry
                     delay = _RETRY_DELAYS[new_retry - 1]
-                    logger.info("URL %s 第 %d 次重试, %ds 后自动重入队", url_id, new_retry, delay)
+                    logger.info(
+                        "URL %s 第 %d 次重试, %ds 后自动重入队",
+                        url_id,
+                        new_retry,
+                        delay,
+                    )
                     if enqueue_callback:
-                        _asyncio.create_task(_delayed_enqueue(enqueue_callback, task_id, msg, delay))
+                        _asyncio.create_task(
+                            _delayed_enqueue(enqueue_callback, task_id, msg, delay)
+                        )
                 else:
                     url_record.status = "failed"
-                    url_record.error_msg = f"重试{max_auto_retry}次仍失败: {_fmt_error(e)}"
+                    url_record.error_msg = (
+                        f"重试{max_auto_retry}次仍失败: {_fmt_error(e)}"
+                    )
 
             task = await session.get(Task, task_id)
             if task:
                 # 重算所有计数器
-                completed = (await session.execute(
-                    select(func.count()).select_from(UrlRecord).where(
-                        UrlRecord.task_id == task_id, UrlRecord.status == "completed"))).scalar() or 0
-                partial = (await session.execute(
-                    select(func.count()).select_from(UrlRecord).where(
-                        UrlRecord.task_id == task_id, UrlRecord.status == "partial"))).scalar() or 0
-                failed = (await session.execute(
-                    select(func.count()).select_from(UrlRecord).where(
-                        UrlRecord.task_id == task_id, UrlRecord.status == "failed"))).scalar() or 0
+                completed = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(UrlRecord)
+                        .where(
+                            UrlRecord.task_id == task_id,
+                            UrlRecord.status == "completed",
+                        )
+                    )
+                ).scalar() or 0
+                partial = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(UrlRecord)
+                        .where(
+                            UrlRecord.task_id == task_id, UrlRecord.status == "partial"
+                        )
+                    )
+                ).scalar() or 0
+                failed = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(UrlRecord)
+                        .where(
+                            UrlRecord.task_id == task_id, UrlRecord.status == "failed"
+                        )
+                    )
+                ).scalar() or 0
                 task.completed_urls = completed + partial + failed
                 task.failed_urls = failed
                 task.updated_at = datetime.now()
 
                 # 所有 URL 都处理完 → 更新任务最终状态
-                remaining = (await session.execute(
-                    select(func.count()).select_from(UrlRecord).where(
-                        UrlRecord.task_id == task_id,
-                        UrlRecord.status.in_(["pending", "processing"])))
+                remaining = (
+                    await session.execute(
+                        select(func.count())
+                        .select_from(UrlRecord)
+                        .where(
+                            UrlRecord.task_id == task_id,
+                            UrlRecord.status.in_(["pending", "processing"]),
+                        )
+                    )
                 ).scalar() or 0
                 if remaining == 0:
                     if failed > 0:
@@ -393,8 +511,12 @@ async def process_url_message(
 
             if progress_callback and task:
                 await progress_callback(
-                    task_id, task.completed_urls, task.total_urls, task.failed_urls,
-                    f"失败: {url_type}")
+                    task_id,
+                    task.completed_urls,
+                    task.total_urls,
+                    task.failed_urls,
+                    f"失败: {url_type}",
+                )
 
         except Exception as inner_e:
             logger.error(f"更新失败状态时出错: {inner_e}")

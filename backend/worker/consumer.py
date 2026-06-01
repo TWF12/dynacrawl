@@ -2,6 +2,7 @@
 独立 Worker 进程（Redis 模式）
 启动方式: uv run python -m backend.worker.consumer
 """
+
 import sys
 import asyncio
 
@@ -15,7 +16,9 @@ from backend.database import async_session, init_db
 from backend.crawler.browser_pool import BrowserPool
 from backend.crawler.url_processor import process_url_message
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
 logger = logging.getLogger("worker")
 
 
@@ -34,10 +37,13 @@ async def consumer_loop(redis_client: aioredis.Redis, browser_pool: BrowserPool)
                 async def handle():
                     async with async_session() as session:
                         await process_url_message(
-                            msg, browser_pool, session,
+                            msg,
+                            browser_pool,
+                            session,
                             enqueue_callback=enqueue,
                             consumer_label="[Worker] ",
                         )
+
                 asyncio.create_task(handle())
         except asyncio.CancelledError:
             break
@@ -56,6 +62,7 @@ async def main():
     finally:
         await browser_pool.stop()
         await redis_client.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

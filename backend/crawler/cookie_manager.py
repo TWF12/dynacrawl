@@ -1,4 +1,5 @@
 """Cookie 管理器 — 多文件轮换 + 过期自动检测删除"""
+
 import json
 import logging
 import asyncio
@@ -126,10 +127,13 @@ class CookieManager:
                 continue
 
             try:
-                req = urllib.request.Request(_NAV_URL, headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Cookie": cookie_str,
-                })
+                req = urllib.request.Request(
+                    _NAV_URL,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Cookie": cookie_str,
+                    },
+                )
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read())
                 if data.get("data", {}).get("isLogin"):

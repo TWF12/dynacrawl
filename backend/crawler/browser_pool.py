@@ -7,7 +7,14 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 from backend.config import BROWSER_CONCURRENCY, BROWSER_HEADLESS
-from backend.crawler.anti_detect import apply_stealth, setup_page, get_random_ua, get_random_proxy, rotate_proxy_if_needed, make_browser_fingerprint
+from backend.crawler.anti_detect import (
+    apply_stealth,
+    setup_page,
+    get_random_ua,
+    get_random_proxy,
+    rotate_proxy_if_needed,
+    make_browser_fingerprint,
+)
 from backend.crawler.cookie_manager import cookie_manager
 
 logger = logging.getLogger(__name__)
@@ -40,8 +47,12 @@ class BrowserPool:
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
                 headless=BROWSER_HEADLESS,
-                args=["--disable-blink-features=AutomationControlled",
-                       "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                ],
             )
 
     async def _ensure_headful_browser(self):
@@ -52,9 +63,14 @@ class BrowserPool:
             self._headful_playwright = await async_playwright().start()
             self._headful_browser = await self._headful_playwright.chromium.launch(
                 headless=False,
-                args=["--disable-blink-features=AutomationControlled",
-                       "--disable-dev-shm-usage", "--no-sandbox", "--disable-setuid-sandbox",
-                       "--start-minimized", "--window-position=-32000,-32000"],
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--start-minimized",
+                    "--window-position=-32000,-32000",
+                ],
             )
 
     @asynccontextmanager
@@ -145,12 +161,18 @@ class BrowserPool:
                 self._headful_playwright = None
 
             for ctx in self._contexts:
-                try: cookie_manager.unregister_context(ctx); await ctx.close()
-                except Exception: pass
+                try:
+                    cookie_manager.unregister_context(ctx)
+                    await ctx.close()
+                except Exception:
+                    pass
             self._contexts.clear()
             for ctx in self._headful_contexts:
-                try: cookie_manager.unregister_context(ctx); await ctx.close()
-                except Exception: pass
+                try:
+                    cookie_manager.unregister_context(ctx)
+                    await ctx.close()
+                except Exception:
+                    pass
             self._headful_contexts.clear()
             if self._browser:
                 await self._browser.close()
@@ -165,7 +187,9 @@ class BrowserPool:
         proxy = get_random_proxy()
         storage, filepath = await cookie_manager.get_next()
         context = await self._browser.new_context(
-            user_agent=fp["user_agent"], viewport={"width": 1920, "height": 1080}, locale="zh-CN",
+            user_agent=fp["user_agent"],
+            viewport={"width": 1920, "height": 1080},
+            locale="zh-CN",
             proxy=proxy,
             storage_state=storage,
         )

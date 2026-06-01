@@ -1,5 +1,14 @@
 from fastapi import APIRouter, HTTPException
-from backend.schemas import TaskCreateRequest, BatchCreateRequest, TaskResponse, TaskResultResponse, UrlRecordResponse, UpInfoResponse, VideoInfoResponse, CommentResponse
+from backend.schemas import (
+    TaskCreateRequest,
+    BatchCreateRequest,
+    TaskResponse,
+    TaskResultResponse,
+    UrlRecordResponse,
+    UpInfoResponse,
+    VideoInfoResponse,
+    CommentResponse,
+)
 from backend.routers.ws import get_cached_progress, get_cached_video_progress
 from backend.services import task_service
 from backend.crawler.dispatcher import get_dispatcher
@@ -43,7 +52,9 @@ async def list_tasks(page: int = 1, page_size: int = 20):
     tasks, total = await task_service.get_tasks(page, page_size)
     return {
         "items": [TaskResponse.model_validate(t) for t in tasks],
-        "total": total, "page": page, "page_size": page_size,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
     }
 
 
@@ -71,10 +82,25 @@ async def get_task_results(task_id: str):
     vc, vt = get_cached_video_progress(task_id)
     return TaskResultResponse(
         task=TaskResponse.model_validate(results["task"]),
-        url_records=[UrlRecordResponse.model_validate(r) for r in results["url_records"]],
-        up_infos=[UpInfoResponse.model_validate(u) for u in results["up_infos"]] if results["up_infos"] else None,
-        video_infos=[VideoInfoResponse.model_validate(v) for v in results["video_infos"]] if results["video_infos"] else None,
-        comments=[CommentResponse.model_validate(c) for c in results["comments"]] if results["comments"] else None,
+        url_records=[
+            UrlRecordResponse.model_validate(r) for r in results["url_records"]
+        ],
+        up_infos=(
+            [UpInfoResponse.model_validate(u) for u in results["up_infos"]]
+            if results["up_infos"]
+            else None
+        ),
+        video_infos=(
+            [VideoInfoResponse.model_validate(v) for v in results["video_infos"]]
+            if results["video_infos"]
+            else None
+        ),
+        comments=(
+            [CommentResponse.model_validate(c) for c in results["comments"]]
+            if results["comments"]
+            else None
+        ),
         progress_message=get_cached_progress(task_id),
-        video_current=vc, video_total=vt,
+        video_current=vc,
+        video_total=vt,
     )

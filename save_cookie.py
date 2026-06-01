@@ -1,4 +1,5 @@
 """B站 Cookie 保存工具 —— 扫码登录后保存到 data/cookies/ 目录（支持多账号轮换）"""
+
 import asyncio, json, os
 from pathlib import Path
 from playwright.async_api import async_playwright
@@ -25,7 +26,9 @@ def _next_filename() -> str:
 async def main():
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(headless=False)
-        ctx = await browser.new_context(viewport={"width": 1920, "height": 1080}, locale="zh-CN")
+        ctx = await browser.new_context(
+            viewport={"width": 1920, "height": 1080}, locale="zh-CN"
+        )
         page = await ctx.new_page()
 
         # 打开 B站 首页，等用户扫码登录
@@ -73,5 +76,6 @@ async def main():
 
         await ctx.close()
         await browser.close()
+
 
 asyncio.run(main())

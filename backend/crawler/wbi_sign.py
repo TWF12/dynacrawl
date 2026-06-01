@@ -8,10 +8,70 @@ from playwright.async_api import Page
 logger = logging.getLogger(__name__)
 
 MIXIN_KEY_ENC_TAB = [
-    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
-    27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
-    37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
-    22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 52, 34, 44,
+    46,
+    47,
+    18,
+    2,
+    53,
+    8,
+    23,
+    32,
+    15,
+    50,
+    10,
+    31,
+    58,
+    3,
+    45,
+    35,
+    27,
+    43,
+    5,
+    49,
+    33,
+    9,
+    42,
+    19,
+    29,
+    28,
+    14,
+    39,
+    12,
+    38,
+    41,
+    13,
+    37,
+    48,
+    7,
+    16,
+    24,
+    55,
+    40,
+    61,
+    26,
+    17,
+    0,
+    1,
+    60,
+    51,
+    30,
+    4,
+    22,
+    25,
+    54,
+    21,
+    56,
+    59,
+    6,
+    63,
+    57,
+    62,
+    11,
+    36,
+    20,
+    52,
+    34,
+    44,
 ]
 
 _cached_mixin_key: str = ""
@@ -39,7 +99,9 @@ async def _fetch_mixin_key(page: Page) -> str:
         return _cached_mixin_key
 
     try:
-        response = await page.goto(NAV_URL, timeout=15000, wait_until="domcontentloaded")
+        response = await page.goto(
+            NAV_URL, timeout=15000, wait_until="domcontentloaded"
+        )
         if response and response.ok:
             body_text = await page.evaluate("() => document.body.innerText")
             data = json.loads(body_text)

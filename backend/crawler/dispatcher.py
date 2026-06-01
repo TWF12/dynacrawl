@@ -13,25 +13,38 @@ logger = logging.getLogger(__name__)
 
 class QueueInterface(ABC):
     @abstractmethod
-    async def push(self, task_id: str, url_data: dict): pass
+    async def push(self, task_id: str, url_data: dict):
+        pass
+
     @abstractmethod
-    async def pop(self, timeout: float = 1.0) -> Optional[dict]: pass
+    async def pop(self, timeout: float = 1.0) -> Optional[dict]:
+        pass
+
     @abstractmethod
-    async def length(self) -> int: pass
+    async def length(self) -> int:
+        pass
+
     @abstractmethod
-    async def remove_task(self, task_id: str) -> int: pass
+    async def remove_task(self, task_id: str) -> int:
+        pass
 
 
 class MemoryQueue(QueueInterface):
     def __init__(self):
         self._queue: asyncio.Queue = asyncio.Queue()
+
     async def push(self, task_id: str, url_data: dict):
         await self._queue.put({"task_id": task_id, **url_data})
+
     async def pop(self, timeout: float = 1.0) -> Optional[dict]:
-        try: return await asyncio.wait_for(self._queue.get(), timeout=timeout)
-        except asyncio.TimeoutError: return None
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
     async def length(self) -> int:
         return self._queue.qsize()
+
     async def remove_task(self, task_id: str) -> int:
         removed = 0
         kept = []
@@ -51,17 +64,22 @@ class MemoryQueue(QueueInterface):
 
 class RedisQueue(QueueInterface):
     QUEUE_KEY = QUEUE_KEY
+
     def __init__(self, redis_url: str = REDIS_URL):
         self._redis_url = redis_url
         self._redis = None
+
     async def _ensure_redis(self):
         if self._redis is None:
             import redis.asyncio as aioredis
+
             self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
+
     async def push(self, task_id: str, url_data: dict):
         await self._ensure_redis()
         msg = json.dumps({"task_id": task_id, **url_data}, ensure_ascii=False)
         await self._redis.lpush(self.QUEUE_KEY, msg)
+
     async def pop(self, timeout: float = 1.0) -> Optional[dict]:
         await self._ensure_redis()
         result = await self._redis.brpop(self.QUEUE_KEY, timeout=int(timeout))
@@ -69,17 +87,24 @@ class RedisQueue(QueueInterface):
             _, msg = result
             return json.loads(msg)
         return None
+
     async def length(self) -> int:
         await self._ensure_redis()
         return await self._redis.llen(self.QUEUE_KEY)
+
     async def remove_task(self, task_id: str) -> int:
         # Redis 队列无法高效过滤单个任务, 由 consumer 侧跳过 + 过期 collection 清理
         return 0
 
 
 class CrawlDispatcher:
-    def __init__(self, queue: QueueInterface, browser_pool, db_session_factory,
-                 progress_callback: Optional[ProgressCallback] = None):
+    def __init__(
+        self,
+        queue: QueueInterface,
+        browser_pool,
+        db_session_factory,
+        progress_callback: Optional[ProgressCallback] = None,
+    ):
         self.queue = queue
         self.browser_pool = browser_pool
         self.db_session_factory = db_session_factory
@@ -91,7 +116,9 @@ class CrawlDispatcher:
     async def start(self):
         self._running = True
         for i in range(self.browser_pool.concurrency):
-            task = asyncio.create_task(self._consumer_loop(i), name=f"crawler-consumer-{i}")
+            task = asyncio.create_task(
+                self._consumer_loop(i), name=f"crawler-consumer-{i}"
+            )
             self._consumer_tasks.append(task)
         logger.info(f"调度器已启动，消费者: {self.browser_pool.concurrency}")
 
@@ -134,7 +161,9 @@ class CrawlDispatcher:
 
             async with self.db_session_factory() as session:
                 await process_url_message(
-                    msg, self.browser_pool, session,
+                    msg,
+                    self.browser_pool,
+                    session,
                     enqueue_callback=enqueue,
                     progress_callback=self.progress_callback,
                     consumer_label=label,

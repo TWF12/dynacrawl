@@ -9,7 +9,9 @@ from backend.config import REQUEST_DELAY_MIN, REQUEST_DELAY_MAX, PROXY_LIST
 logger = logging.getLogger(__name__)
 
 from browserforge.headers import HeaderGenerator
-_header_gen = HeaderGenerator(browser='chrome', os='windows', device='desktop')
+
+_header_gen = HeaderGenerator(browser="chrome", os="windows", device="desktop")
+
 
 # 浏览器伪装指纹 — 每次调用生成一致的 UA + Headers (版本匹配)
 def make_browser_fingerprint() -> dict:
@@ -20,11 +22,15 @@ def make_browser_fingerprint() -> dict:
         "user_agent": ua,
         "extra_headers": {
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Accept": h.get("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"),
+            "Accept": h.get(
+                "Accept",
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            ),
             "Sec-Ch-UA": h.get("sec-ch-ua", ""),
             "Sec-Ch-UA-Platform": '"Windows"',
         },
     }
+
 
 # 保留向后兼容: 模块加载时生成一组默认指纹
 _DEFAULT_FP = make_browser_fingerprint()
@@ -45,7 +51,6 @@ async def report_page_and_rotate() -> int:
 def get_random_ua() -> str:
     """browserforge: UA 与 Sec-CH-UA 版本号一致, 无手动维护"""
     return _header_gen.generate().get("User-Agent", "")
-
 
 
 # 代理选择与轮换 — 支持 Clash API 和普通代理列表两种模式
@@ -94,6 +99,7 @@ _stealth_config = StealthConfig(
     accept_language="zh-CN,zh;q=0.9,en;q=0.8",
 )
 
+
 async def apply_stealth(context: BrowserContext):
     """pw-stealth-enhanced: 注入 Canvas/WebGL/AudioContext/字体等 30+ 检测点隐身"""
     await _stealth_apply(context, config=_stealth_config)
@@ -131,9 +137,15 @@ async def random_delay():
 # 行为拟人化 — 鼠标轨迹/滚动/停留
 # ============================================================
 
+
 def _bezier_point(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
     """三次贝塞尔曲线"""
-    return (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t ** 2 * p2 + t ** 3 * p3
+    return (
+        (1 - t) ** 3 * p0
+        + 3 * (1 - t) ** 2 * t * p1
+        + 3 * (1 - t) * t**2 * p2
+        + t**3 * p3
+    )
 
 
 async def human_mouse_move(page: Page, target_x: int, target_y: int, steps: int = None):

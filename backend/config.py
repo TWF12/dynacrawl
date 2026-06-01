@@ -5,13 +5,19 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DATA_DIR / 'dynacrawl.db'}")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", f"sqlite+aiosqlite:///{DATA_DIR / 'dynacrawl.db'}"
+)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 USE_REDIS = os.getenv("USE_REDIS", "").lower() in ("1", "true", "yes")
 
 BROWSER_CONCURRENCY = int(os.getenv("BROWSER_CONCURRENCY", "3"))
-BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() not in ("0", "false", "no")
+BROWSER_HEADLESS = os.getenv("BROWSER_HEADLESS", "true").lower() not in (
+    "0",
+    "false",
+    "no",
+)
 
 REQUEST_DELAY_MIN = float(os.getenv("REQUEST_DELAY_MIN", "3.0"))
 REQUEST_DELAY_MAX = float(os.getenv("REQUEST_DELAY_MAX", "8.0"))
