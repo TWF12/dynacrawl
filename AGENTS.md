@@ -74,7 +74,6 @@ frontend/
 
 - **默认直连**：国内网络直连 B站 最稳定，配合多 Cookie + 渐进延迟
 - **可选 PROXY_LIST**：支持自定义代理列表（逗号分隔的 URL），自动轮换
-- 不再内置 Clash 依赖（机场 IP 易被 B站 识别）
 
 ### Session 轮换
 
@@ -161,8 +160,3 @@ frontend/
 | `sqlalchemy` | ORM | async + aiosqlite |
 | `aiofiles` | 异步文件 | CSV/JSON 导出 |
 
-## 每次修改后必须同步
-
-- `git add` + `git commit`（中文，格式如 `fix: xxx` / `feat: xxx`）
-- 更新 `AGENTS.md`（本文档）—— 架构/配置/关键设计变化
-- 更新 `README.md` —— 环境变量、用法、FAQ 变化
