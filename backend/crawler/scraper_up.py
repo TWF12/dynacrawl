@@ -6,7 +6,7 @@ from typing import Optional, Callable, Awaitable
 from urllib.parse import urlencode
 from playwright.async_api import Page
 from backend.config import PAGE_TIMEOUT
-from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, report_proxy_success, report_proxy_failure, human_scroll, human_dwell
+from backend.crawler.anti_detect import random_delay, is_task_cancelled, report_page_and_rotate, get_random_ua, human_scroll, human_dwell
 from backend.crawler.browser_pool import browser_pool
 from backend.crawler.cookie_manager import cookie_manager
 from backend.crawler.wbi_sign import sign_params, get_mixin_key
@@ -752,7 +752,6 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
 
         code = data.get("code")
         if code == 0 and isinstance(data.get("data"), dict):
-            report_proxy_success()
             return data["data"], False
 
         logger.warning("arc/search pn=%d code=%d msg=%s",
@@ -775,7 +774,6 @@ async def _fetch_arc_page(page: Page, uid: str, pn: int, mixin_key: str) -> tupl
         return None, False
     except Exception as exc:
         logger.warning("fetch arc/search pn=%d 失败: %s", pn, exc)
-        report_proxy_failure()
         return None, False
 
 
