@@ -157,7 +157,7 @@ async def scrape_video_info(page: Page, bv_id: str) -> dict:
 
 async def scrape_video_comments(
     page: Optional[Page], bv_id: str, aid: int = None, comment_count: int = 0,
-    max_pages: int = 17, progress_callback=None,
+    max_pages: int = 34, progress_callback=None,
 ) -> tuple[list[dict], int]:
     """爬取视频评论(headful + WBI签名, 同 arc/search 模式)。page=None 时自动创建 headful context"""
     comments = []
