@@ -41,25 +41,10 @@ def _print_startup_warnings():
 
     # 代理检查
     proxy_list_raw = os.environ.get("PROXY_LIST", "")
-    clash_ctrl = os.environ.get("CLASH_CONTROLLER", "http://127.0.0.1:9090")
     if proxy_list_raw:
         logger.info("代理已配置(PROXY_LIST): %d 个地址", len(PROXY_LIST))
-    elif PROXY_LIST:
-        # config.py 自动从 Clash 注入了代理地址
-        logger.info("Clash 代理模式: %s (自动检测)", clash_ctrl)
     else:
-        warnings.append("未配置任何代理 (PROXY_LIST / CLASH_CONTROLLER)")
-        warnings.append("  直连采集极易触发 B站 风控, 强烈建议配置代理")
-
-    # Clash API 可达性 (仅当配置了 Clash 时检查)
-    if not proxy_list_raw and PROXY_LIST:
-        try:
-            import urllib.request
-            urllib.request.urlopen(f"{clash_ctrl}/proxies", timeout=3)
-            logger.info("Clash API 可达: %s", clash_ctrl)
-        except Exception:
-            warnings.append(f"Clash API 不可达 ({clash_ctrl})")
-            warnings.append("  代理轮换将不可用, 请确认 Clash 已启动且 API 端口正确")
+        logger.info("代理未配置, 使用直连 (配合 Cookie + 合理延迟可稳定采集)")
 
     if warnings:
         logger.warning("=" * 50)
