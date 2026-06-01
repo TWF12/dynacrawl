@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import asyncio as _asyncio
@@ -214,7 +215,27 @@ async def process_url_message(
                         video_current=current, video_total=total)
 
             if not aid:
-                # 缺少 aid 无法采集评论 (API 和 DOM 均未提取到)
+                # aid 缺失: 尝试直接从 view API 获取 (video_api 可能尚未完成)
+                logger.warning("DB 中缺少 aid, 尝试从 view API 获取 bv_id=%s", bv)
+                try:
+                    async with browser_pool.acquire_headful_context() as aid_ctx:
+                        aid_pg = await aid_ctx.new_page()
+                        try:
+                            view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bv}"
+                            resp = await aid_pg.goto(view_url, timeout=15000, wait_until="domcontentloaded")
+                            if resp and resp.ok:
+                                text = await aid_pg.evaluate("() => document.body.innerText")
+                                data = json.loads(text)
+                                if data.get("code") == 0:
+                                    aid = data["data"].get("aid")
+                                    comment_count = data["data"].get("stat", {}).get("reply", 0)
+                                    logger.info("view API 获取 aid=%s comment_count=%s", aid, comment_count)
+                        finally:
+                            await aid_pg.close()
+                except Exception as e2:
+                    logger.warning("view API 获取 aid 失败: %s", e2)
+            if not aid:
+                # 所有途径均无法获取 aid
                 logger.warning("缺少 aid, 跳过评论采集 bv_id=%s", bv)
                 comments, pages = [], 0
             else:
