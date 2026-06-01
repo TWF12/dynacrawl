@@ -70,12 +70,11 @@ frontend/
 - headful 浏览器强制使用（B站对 headless 返回空壳 HTML）
 - headful 最小化并移到屏幕外（`--start-minimized`, `--window-position=-32000,-32000`）
 
-### 代理轮换
+### 代理
 
-- **双模式**：Clash API（优先）→ 普通 PROXY_LIST 轮换（兜底）
-- **全局统一 IP 轮换**：所有任务共享 IP，每 10 页总阈值触发一次切换
-- **节点质量评分**：成功 +1 / 失败 -2，低于 -3 分跳过，加权随机选高分节点
-- 并发切换保护：`asyncio.Lock()`
+- **默认直连**：国内网络直连 B站 最稳定，配合多 Cookie + 渐进延迟
+- **可选 PROXY_LIST**：支持自定义代理列表（逗号分隔的 URL），自动轮换
+- 不再内置 Clash 依赖（机场 IP 易被 B站 识别）
 
 ### Session 轮换
 
@@ -105,7 +104,7 @@ frontend/
 
 - API 全部失败时走 `/upload/video` 页面提取（登录墙下仍可见 navBar）
 - 双策略：视频列表分页 → 空间主页滚动
-- 双连接：先代理 → 后直连（任一连通即可）
+- 直连提取（无需代理）
 - 昵称/粉丝/视频数从 navBar + section header 精准提取
 
 ### WBI 签名
@@ -137,10 +136,7 @@ frontend/
 | `REQUEST_DELAY_MIN` | 3.0 | 基础请求最小延迟(秒) |
 | `REQUEST_DELAY_MAX` | 8.0 | 基础请求最大延迟(秒) |
 | `PAGE_TIMEOUT` | 30000 | 页面超时(毫秒) |
-| `PROXY_LIST` | (空) | 代理列表，逗号分隔；留空从 Clash 获取 |
-| `CLASH_CONTROLLER` | http://127.0.0.1:9090 | Clash REST API |
-| `CLASH_PROXY` | http://127.0.0.1:7890 | Clash 代理端口 |
-| `CLASH_GROUP` | (自动检测) | Clash 代理组名 |
+| `PROXY_LIST` | (空) | 自定义代理 URL 列表，逗号分隔；留空则直连 |
 | `COOKIE_DIR` | data/cookies/ | Cookie 目录（多文件轮换） |
 | `USE_REDIS` | false | 启用 Redis 多 Worker |
 | `DATABASE_URL` | sqlite+aiosqlite:///data/dynacrawl.db | 数据库 |
@@ -148,7 +144,7 @@ frontend/
 ## 注意事项
 
 - **Cookie 必须**：无 Cookie 部分 API 限流或返回空数据，DOM 兜底可降级获取 UP 信息
-- **代理强烈建议**：无代理启动会打印警告，大规模采集直连必然触发风控
+- **直连推荐**：国内直连 + 多 Cookie 比机场代理更稳定（机场 IP 已被 B站 标记）
 - **B站页面用 domcontentloaded**：`networkidle` 因持续连接永不触发导致超时
 - **headful 是核心**：B站对 headless 返回空壳（0 个 BV 链接），UP 采集和 video_api 均使用 headful
 - **前端无构建**：Vue 3 + Element Plus 全部 CDN 引入，无需 npm/Node.js
@@ -163,6 +159,7 @@ frontend/
 | `playwright` | 浏览器自动化 | headful Chromium |
 | `fastapi` | Web 框架 | API + WebSocket |
 | `sqlalchemy` | ORM | async + aiosqlite |
+| `aiofiles` | 异步文件 | CSV/JSON 导出 |
 
 ## 每次修改后必须同步
 
