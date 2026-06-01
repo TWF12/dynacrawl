@@ -207,6 +207,7 @@ async def scrape_video_comments(
     api_pages = min(max_pages, max(1, (comment_count + 29) // 30))
     SESSION_PAGES = 3  # 每 3 页轮换 context (换 IP + cookie), 防风控
 
+    logger.info("开始评论采集 bv=%s aid=%s comment_count=%d api_pages=%d", bv_id, aid, comment_count, api_pages)
     pn = 1
     session_failures = 0
     while pn <= api_pages:
@@ -292,6 +293,7 @@ async def scrape_video_comments(
                             break  # 换 session 重试 (新 IP + cookie)
 
                         replies = data.get("data", {}).get("replies", []) or []
+                        logger.info("评论 pn=%d code=%d replies=%d total=%d", _pn, code, len(replies), len(comments))
                         for r in replies:
                             comments.append(
                                 {
