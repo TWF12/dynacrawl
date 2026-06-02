@@ -289,7 +289,20 @@ async def process_url_message(
                 comments, pages = await scrape_video_comments(
                     None, bv, aid=aid, comment_count=comment_count,
                     progress_callback=_comment_progress, task_id=task_id)
+            # 断点去重: 查询已有评论, 跳过重复 (同步 UP 视频列表的 existing_bvids 模式)
+            existing_keys = set()
+            existing_rows = (
+                await session.execute(
+                    select(Comment.content, Comment.username).where(
+                        Comment.task_id == task_id, Comment.bv_id == bv))
+            ).all()
+            existing_keys = {(r[0], r[1]) for r in existing_rows}
+            new_count = 0
             for c in comments:
+                key = (c.get("content", ""), c.get("username", ""))
+                if key in existing_keys:
+                    continue
+                existing_keys.add(key)
                 session.add(
                     Comment(
                         task_id=task_id, bv_id=c.get("bv_id", ""),
@@ -297,6 +310,9 @@ async def process_url_message(
                         like_count=c.get("like_count"), posted_at=c.get("posted_at"),
                     )
                 )
+                new_count += 1
+            if new_count < len(comments):
+                logger.info("评论去重: %d/%d 条新增 (已有 %d 条)", new_count, len(comments), len(existing_keys) - new_count)
             com_errors = []
             com_status = "ok"
             if not aid:

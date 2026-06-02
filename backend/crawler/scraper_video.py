@@ -211,7 +211,7 @@ async def scrape_video_comments(
             for _ in range(2):
                 try:
                     resp = await pg.goto(
-                        "https://www.bilibili.com/", timeout=30000, wait_until="domcontentloaded"
+                        "https://www.bilibili.com/", timeout=15000, wait_until="domcontentloaded"
                     )
                     if resp and resp.ok:
                         await pg.wait_for_timeout(500)
@@ -235,8 +235,12 @@ async def scrape_video_comments(
             text = await pg.evaluate("() => document.body.innerText")
             data = json.loads(text)
 
-            if data.get("code") != 0:
-                logger.warning("reply API code=%d bv=%s", data.get("code"), bv_id)
+            code = data.get("code")
+            if code in (-101, 3, -6):
+                logger.warning("Cookie 已过期! code=%d bv=%s, 自动删除", code, bv_id)
+                await cookie_manager.mark_invalid(pg.context)
+            if code != 0:
+                logger.warning("reply API code=%d bv=%s", code, bv_id)
                 return comments, 0
 
             replies = data.get("data", {}).get("replies", []) or []
