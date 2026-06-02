@@ -28,17 +28,25 @@ class QueueInterface(ABC):
     async def remove_task(self, task_id: str) -> int:
         pass
 
+    @abstractmethod
+    async def clear_cancelled(self, task_id: str):
+        pass
+
 
 class MemoryQueue(QueueInterface):
     def __init__(self):
         self._queue: asyncio.Queue = asyncio.Queue()
+        self._cancelled: set[str] = set()
 
     async def push(self, task_id: str, url_data: dict):
         await self._queue.put({"task_id": task_id, **url_data})
 
     async def pop(self, timeout: float = 1.0) -> Optional[dict]:
         try:
-            return await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            data = await asyncio.wait_for(self._queue.get(), timeout=timeout)
+            if data.get("task_id") in self._cancelled:
+                return await self.pop(timeout)  # 跳过已取消
+            return data
         except asyncio.TimeoutError:
             return None
 
@@ -46,6 +54,7 @@ class MemoryQueue(QueueInterface):
         return self._queue.qsize()
 
     async def remove_task(self, task_id: str) -> int:
+        self._cancelled.add(task_id)
         removed = 0
         kept = []
         while not self._queue.empty():
@@ -61,6 +70,9 @@ class MemoryQueue(QueueInterface):
             await self._queue.put(item)
         return removed
 
+    async def clear_cancelled(self, task_id: str):
+        self._cancelled.discard(task_id)
+
 
 class RedisQueue(QueueInterface):
     QUEUE_KEY = QUEUE_KEY
@@ -75,6 +87,9 @@ class RedisQueue(QueueInterface):
 
             self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
 
+    def _cancelled_key(self) -> str:
+        return f"{self.QUEUE_KEY}:cancelled"
+
     async def push(self, task_id: str, url_data: dict):
         await self._ensure_redis()
         msg = json.dumps({"task_id": task_id, **url_data}, ensure_ascii=False)
@@ -85,7 +100,14 @@ class RedisQueue(QueueInterface):
         result = await self._redis.brpop(self.QUEUE_KEY, timeout=int(timeout))
         if result:
             _, msg = result
-            return json.loads(msg)
+            data = json.loads(msg)
+            # 跳过已取消任务的 URL
+            cancelled = await self._redis.sismember(
+                self._cancelled_key(), data.get("task_id", "")
+            )
+            if cancelled:
+                return await self.pop(timeout)  # 递归跳过, 取下一个
+            return data
         return None
 
     async def length(self) -> int:
@@ -93,8 +115,14 @@ class RedisQueue(QueueInterface):
         return await self._redis.llen(self.QUEUE_KEY)
 
     async def remove_task(self, task_id: str) -> int:
-        # Redis 队列无法高效过滤单个任务, 由 consumer 侧跳过 + 过期 collection 清理
-        return 0
+        """标记任务为已取消 (pop 时自动跳过), 返回 1"""
+        await self._ensure_redis()
+        return await self._redis.sadd(self._cancelled_key(), task_id)
+
+    async def clear_cancelled(self, task_id: str):
+        """任务完成/删除后清理取消标记"""
+        await self._ensure_redis()
+        await self._redis.srem(self._cancelled_key(), task_id)
 
 
 class CrawlDispatcher:
@@ -136,11 +164,16 @@ class CrawlDispatcher:
         logger.info(f"任务 {task_id} 已提交 {len(urls)} 个 URL")
 
     async def cancel_task(self, task_id: str):
-        """取消任务: 全局标记 + 清理队列中待处理的 URL"""
+        """取消任务: 全局标记 + 队列标记 (pop 时自动跳过)"""
         self._cancelled_tasks.add(task_id)
         mark_task_cancelled(task_id)
         removed = await self.queue.remove_task(task_id)
-        logger.info(f"任务 {task_id} 已取消, 队列中移除 {removed} 个 URL")
+        logger.info(f"任务 {task_id} 已取消, 队列标记 {removed}")
+
+    async def clear_cancelled(self, task_id: str):
+        """任务完成: 清理全局 + 队列的取消标记"""
+        self._cancelled_tasks.discard(task_id)
+        await self.queue.clear_cancelled(task_id)
 
     async def _consumer_loop(self, consumer_id: int):
         label = f"消费者 {consumer_id} "
@@ -156,6 +189,7 @@ class CrawlDispatcher:
 
             task_id = msg.get("task_id", "")
             if is_task_cancelled(task_id):
+                await self.queue.clear_cancelled(task_id)
                 logger.info("%s跳过已取消任务 %s 的 URL", label, task_id)
                 continue
 
@@ -168,6 +202,9 @@ class CrawlDispatcher:
                     progress_callback=self.progress_callback,
                     consumer_label=label,
                 )
+            # URL 处理完成后检查: 如果任务已取消, 清理队列标记
+            if is_task_cancelled(task_id):
+                await self.queue.clear_cancelled(task_id)
 
 
 _dispatcher: Optional[CrawlDispatcher] = None
