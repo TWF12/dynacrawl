@@ -131,6 +131,7 @@ const app = createApp({
                                 wsProgress.videoPercent = Math.round((d.video_current || 0) / d.video_total * 100);
                             }
                             loadTaskDetail(d.task_id);
+                        }
                         loadTasks();
                     }
                 } catch (e) { console.error("WS error:", e); }
