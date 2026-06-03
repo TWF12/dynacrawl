@@ -85,17 +85,19 @@ const app = createApp({
             connectWebSocket(task.id);
         }
 
-        async function loadTaskDetail(taskId) {
+        async function loadTaskDetail(taskId, skipProgress) {
             try {
                 const res = await axios.get("/api/tasks/" + taskId + "/results");
                 if (!selectedTask.value || selectedTask.value.id !== taskId) return;
                 Object.assign(taskDetail, res.data);
-                const t = res.data.task;
-                wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
-                wsProgress.message = res.data.progress_message || "";
-                wsProgress.videoCurrent = res.data.video_current || 0;
-                wsProgress.videoTotal = res.data.video_total || 0;
-                wsProgress.videoPercent = res.data.video_total > 0 ? Math.round(res.data.video_current / res.data.video_total * 100) : 0;
+                if (!skipProgress) {
+                    const t = res.data.task;
+                    wsProgress.percent = t.total_urls > 0 ? Math.round(t.completed_urls / t.total_urls * 100) : 0;
+                    wsProgress.message = res.data.progress_message || "";
+                    wsProgress.videoCurrent = res.data.video_current || 0;
+                    wsProgress.videoTotal = res.data.video_total || 0;
+                    wsProgress.videoPercent = res.data.video_total > 0 ? Math.round(res.data.video_current / res.data.video_total * 100) : 0;
+                }
             } catch (e) { console.error(e); }
         }
 
@@ -130,7 +132,7 @@ const app = createApp({
                                 wsProgress.videoTotal = d.video_total;
                                 wsProgress.videoPercent = Math.round((d.video_current || 0) / d.video_total * 100);
                             }
-                            loadTaskDetail(d.task_id);
+                            loadTaskDetail(d.task_id, true);  // 只刷新数据, 不覆盖进度条
                         }
                         loadTasks();
                     }
