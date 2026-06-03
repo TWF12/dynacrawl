@@ -126,12 +126,13 @@ const app = createApp({
                             if (d.total_urls > 0) {
                                 wsProgress.percent = Math.round(d.completed_urls / d.total_urls * 100);
                             }
-                            wsProgress.message = d.message || "";
-                            wsProgress.videoCurrent = d.video_current || 0;
-                            wsProgress.videoTotal = d.video_total || 0;
-                            wsProgress.videoPercent = d.video_total > 0 ? Math.round(d.video_current / d.video_total * 100) : 0;
-                            loadTaskDetail(d.task_id);  // 仅在查看当前任务时刷新详情(含评论列表)
-                        }
+                            if (d.message) wsProgress.message = d.message;
+                            if (d.video_total > 0) {
+                                wsProgress.videoCurrent = d.video_current || 0;
+                                wsProgress.videoTotal = d.video_total;
+                                wsProgress.videoPercent = Math.round((d.video_current || 0) / d.video_total * 100);
+                            }
+                            loadTaskDetail(d.task_id);
                         loadTasks();
                     }
                 } catch (e) { console.error("WS error:", e); }

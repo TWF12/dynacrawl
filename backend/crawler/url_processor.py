@@ -84,13 +84,14 @@ async def process_url_message(
     task_id = msg["task_id"]
 
     # Redis 模式: 包装 progress_callback, 同时写 Redis 供跨进程共享
-    if USE_REDIS and progress_callback:
+    if USE_REDIS:
         _orig_cb = progress_callback
 
         async def _redis_wrapped_cb(
             tid, completed, total, failed, message, **kwargs
         ):
-            await _orig_cb(tid, completed, total, failed, message, **kwargs)
+            if _orig_cb:
+                await _orig_cb(tid, completed, total, failed, message, **kwargs)
             await _redis_progress(tid, completed, total, failed, message)
 
         progress_callback = _redis_wrapped_cb
