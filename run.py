@@ -28,6 +28,9 @@ if __name__ == "__main__":
         from backend.database import async_session
 
         async def _run_worker():
+            import redis.asyncio as aioredis
+
+            _redis = aioredis.from_url(REDIS_URL)
             queue = RedisQueue(REDIS_URL)
             dispatcher = CrawlDispatcher(queue, browser_pool, async_session)
             await browser_pool.start()
@@ -35,12 +38,21 @@ if __name__ == "__main__":
             print(f"Worker 模式已启动 (PID: {os.getpid()}), 按 Ctrl+C 停止")
             try:
                 while True:
-                    await _asyncio.sleep(3600)
+                    # 检测主服务心跳: master_alive=0 或 key不存在 → 退出
+                    try:
+                        alive = await _redis.get("dynacrawl:master_alive")
+                        if alive is None or alive == b"0":
+                            print("主服务已停止, Worker 自动退出")
+                            break
+                    except Exception:
+                        break
+                    await _asyncio.sleep(3)
             except KeyboardInterrupt:
                 pass
             finally:
                 await dispatcher.stop()
                 await browser_pool.stop()
+                await _redis.aclose()
 
         _asyncio.run(_run_worker())
     else:

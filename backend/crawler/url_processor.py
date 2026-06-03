@@ -13,6 +13,7 @@ from backend.schemas import TaskStatus
 from backend.crawler.scraper_up import scrape_up_info, scrape_up_videos
 from backend.crawler.scraper_video import scrape_video_info, scrape_video_comments
 from backend.crawler.anti_detect import clear_cancelled_task
+from backend.config import USE_REDIS, REDIS_URL
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,27 @@ ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
 EnqueueCallback = Callable[[str, dict], Awaitable[None]]
 
 
+async def _redis_progress(task_id: str, completed: int, total: int, failed: int, message: str):
+    """Redis 模式进度共享: 写入 Hash, 供主服务轮询后推 WebSocket"""
+    try:
+        import redis.asyncio as aioredis
+
+        r = aioredis.from_url(REDIS_URL)
+        await r.hset(
+            f"dynacrawl:progress:{task_id}",
+            mapping={
+                "completed": str(completed),
+                "total": str(total),
+                "failed": str(failed),
+                "message": message,
+            },
+        )
+        await r.expire(f"dynacrawl:progress:{task_id}", 300)  # 5分钟TTL
+        await r.aclose()
+    except Exception:
+        pass  # Redis不可达时静默跳过, 不影响主流程
+
+
 async def process_url_message(
     msg: dict,
     browser_pool,
@@ -60,6 +82,18 @@ async def process_url_message(
     consumer_label: str = "",
 ):
     task_id = msg["task_id"]
+
+    # Redis 模式: 包装 progress_callback, 同时写 Redis 供跨进程共享
+    if USE_REDIS and progress_callback:
+        _orig_cb = progress_callback
+
+        async def _redis_wrapped_cb(
+            tid, completed, total, failed, message, **kwargs
+        ):
+            await _orig_cb(tid, completed, total, failed, message, **kwargs)
+            await _redis_progress(tid, completed, total, failed, message)
+
+        progress_callback = _redis_wrapped_cb
     url_id = msg["url_id"]
     url_type = msg["url_type"]
     retry_count = msg.get("retry_count", 0)

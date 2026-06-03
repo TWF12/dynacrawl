@@ -105,6 +105,47 @@ async def lifespan(app: FastAPI):
     set_dispatcher(dispatcher)
     await dispatcher.start()
 
+    # Redis 模式: 启动进度同步 + 心跳
+    _redis_sync_task = None
+    _heartbeat_task = None
+    if USE_REDIS:
+        import redis.asyncio as aioredis
+
+        _redis = aioredis.from_url(REDIS_URL)
+
+        async def _sync_redis_progress():
+            """轮询 Redis 中 Worker 写入的进度, 推送到 WebSocket"""
+            while True:
+                try:
+                    keys = await _redis.keys("dynacrawl:progress:*")
+                    for key in keys:
+                        task_id = key.decode().split(":")[-1]
+                        data = await _redis.hgetall(key)
+                        if data:
+                            await ws.progress_callback(
+                                task_id,
+                                int(data.get(b"completed", 0)),
+                                int(data.get(b"total", 0)),
+                                int(data.get(b"failed", 0)),
+                                data.get(b"message", b"").decode(),
+                            )
+                    await _redis.delete(*keys)  # 已推送的清理
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+
+        async def _master_heartbeat():
+            """每2秒刷新心跳, TTL 5秒; Worker 检测不到心跳则自动停止"""
+            while True:
+                try:
+                    await _redis.set("dynacrawl:master_alive", "1", ex=5)
+                except Exception:
+                    pass
+                await asyncio.sleep(2)
+
+        _redis_sync_task = asyncio.create_task(_sync_redis_progress())
+        _heartbeat_task = asyncio.create_task(_master_heartbeat())
+
     logger.info("正在恢复未完成的任务...")
     recovered = await task_service.recover_pending_tasks(dispatcher)
     if recovered > 0:
@@ -114,6 +155,15 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # 停止心跳 (Worker 检测到后自动退出)
+    if _heartbeat_task:
+        _heartbeat_task.cancel()
+    if USE_REDIS:
+        try:
+            await _redis.set("dynacrawl:master_alive", "0", ex=10)
+            await _redis.aclose()
+        except Exception:
+            pass
     logger.info("正在停止调度器...")
     await dispatcher.stop()
     logger.info("正在关闭浏览器池...")
