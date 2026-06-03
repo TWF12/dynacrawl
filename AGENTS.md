@@ -70,17 +70,53 @@ frontend/
 - headful 浏览器强制使用（B站对 headless 返回空壳 HTML）
 - headful 最小化并移到屏幕外（`--start-minimized`, `--window-position=-32000,-32000`）
 
-### 代理
-
 ### Redis 分布式队列
 
-- **双模式**：内存队列（默认）+ Redis 队列（可选，`USE_REDIS=true`）
-- **生产者-消费者模式**：主服务提交任务写入 Redis List，多个 Worker 进程通过 `BRPOP` 并发消费
-- **Worker 独立进程**：`python run.py --worker` 启动纯消费进程，不绑定端口，支持跨终端/跨机器分布式部署
-- **心跳检测**：主服务每 2 秒刷新 `master_alive` key（TTL 5s），Worker 检测到主服务停机后自动退出
-- **取消任务**：Redis Set 标记已取消任务 ID，`pop` 时自动跳过，任务完成后清理
-- **进度同步**：Worker 进度写入 Redis Hash，主服务轮询后推送 WebSocket，跨进程实时进度
-- **自动降级**：启动时 ping Redis，不可达则自动降级为内存队列，不影响单机模式
+支持 Redis 作为消息队列中间件，实现生产者-消费者模式的多 Worker 并发消费。
+
+**启动方式：**
+
+```powershell
+# PowerShell — 主服务 (Web界面 + 3 consumers)
+$env:USE_REDIS = "true"
+uv run python run.py
+```
+```cmd
+:: CMD — 主服务
+set USE_REDIS=true
+uv run python run.py
+```
+```bash
+# Linux/Mac — 主服务
+USE_REDIS=true uv run python run.py
+```
+
+**追加 Worker（新终端，不占端口）：**
+```powershell
+# PowerShell
+$env:USE_REDIS = "true"
+uv run python run.py --worker
+```
+```cmd
+:: CMD
+set USE_REDIS=true
+uv run python run.py --worker
+```
+```bash
+# Linux/Mac
+USE_REDIS=true uv run python run.py --worker
+```
+
+**关键机制：**
+- **双模式**：内存队列（默认）+ Redis 队列（`USE_REDIS=true`）
+- **生产者-消费者**：主服务写入 Redis List，Worker 通过 `BRPOP` 并发消费
+- **Worker 独立进程**：`--worker` 启动纯消费进程，不绑定端口，每 Worker +3 browsers
+- **心跳检测**：主服务每 2 秒刷新 `master_alive` key（TTL 5s），Worker 检测停机后自动退出
+- **取消任务**：Redis Set 标记已取消任务 ID，`pop` 时自动跳过
+- **进度同步**：Worker 写进度到 Redis Hash，主服务轮询推 WebSocket
+- **自动降级**：启动时 ping Redis，不可达自动降级内存队列，不影响单机
+
+**注意：** 需先安装 Redis（WSL `sudo apt install redis-server` 或 Windows [Memurai](https://www.memurai.com/)）。PowerShell 用 `$env:VAR="val"` 设环境变量，CMD 用 `set VAR=val`，Linux/Mac 用 `VAR=val`。
 
 ### 代理
 
@@ -171,4 +207,5 @@ frontend/
 | `fastapi` | Web 框架 | API + WebSocket |
 | `sqlalchemy` | ORM | async + aiosqlite |
 | `aiofiles` | 异步文件 | CSV/JSON 导出 |
+| `redis` | 分布式队列 | 生产者-消费者模式，跨进程并发消费 |
 
