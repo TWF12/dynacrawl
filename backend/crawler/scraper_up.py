@@ -523,7 +523,7 @@ async def scrape_up_videos(
         dom_videos: list[dict] = []
         dom_total = 0
 
-        # 尝试1: headful + 代理 (rotate=True 触发Clash换节点)
+        # 尝试1: headful + 代理 (rotate=True 换代理节点)
         try:
             async with browser_pool.acquire_headful_context(rotate=True) as proxy_ctx:
                 pg = await proxy_ctx.new_page()

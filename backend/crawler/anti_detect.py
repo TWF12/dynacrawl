@@ -53,7 +53,7 @@ def get_random_ua() -> str:
     return _header_gen.generate().get("User-Agent", "")
 
 
-# 代理选择与轮换 — 支持 Clash API 和普通代理列表两种模式
+# 代理选择与轮换 — 支持 PROXY_LIST 代理列表
 _current_proxy_index: int = -1
 
 

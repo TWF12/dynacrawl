@@ -49,8 +49,8 @@ backend/
 │   ├── wbi_sign.py      # B站 WBI 签名（img_key + sub_key 混排 → MD5 w_rid）
 │   ├── url_processor.py # URL 处理 + 进度回调 + 错误处理 + 自动重试
 │   └── dispatcher.py    # 任务调度器（内存队列 / Redis 双模式）
-└── worker/
-    └── consumer.py      # 独立 Worker 进程（Redis 模式专用）
+│
+run.py                  # 入口：uvicorn + --worker 分布式模式
 
 frontend/
 ├── index.html           # Vue 3 + Element Plus CDN 单页应用

@@ -21,16 +21,6 @@ from backend.crawler.cookie_manager import cookie_manager
 logger = logging.getLogger(__name__)
 
 
-def _comment_delay(pn: int, max_pages: int) -> float:
-    """评论翻页渐进延迟: 跟视频列表一样按进度递增"""
-    ratio = pn / max(max_pages, 3)
-    if ratio <= 0.3:
-        return random.uniform(1, 3)
-    elif ratio <= 0.6:
-        return random.uniform(2, 5)
-    else:
-        return random.uniform(4, 8)
-
 
 def _pick_video_status(errors: list[str], has_data: bool) -> str:
     if not errors:
