@@ -81,8 +81,17 @@ async def lifespan(app: FastAPI):
     await browser_pool.start()
 
     if USE_REDIS:
-        logger.info("使用 Redis 队列模式")
-        queue = RedisQueue(REDIS_URL)
+        import redis.asyncio as aioredis
+
+        try:
+            r = aioredis.from_url(REDIS_URL)
+            await r.ping()
+            await r.aclose()
+            logger.info("使用 Redis 队列模式")
+            queue = RedisQueue(REDIS_URL)
+        except Exception as e:
+            logger.warning("Redis 不可达 (%s), 降级为内存队列模式", e)
+            queue = MemoryQueue()
     else:
         logger.info("使用内存队列模式")
         queue = MemoryQueue()
