@@ -72,6 +72,18 @@ frontend/
 
 ### 代理
 
+### Redis 分布式队列
+
+- **双模式**：内存队列（默认）+ Redis 队列（可选，`USE_REDIS=true`）
+- **生产者-消费者模式**：主服务提交任务写入 Redis List，多个 Worker 进程通过 `BRPOP` 并发消费
+- **Worker 独立进程**：`python run.py --worker` 启动纯消费进程，不绑定端口，支持跨终端/跨机器分布式部署
+- **心跳检测**：主服务每 2 秒刷新 `master_alive` key（TTL 5s），Worker 检测到主服务停机后自动退出
+- **取消任务**：Redis Set 标记已取消任务 ID，`pop` 时自动跳过，任务完成后清理
+- **进度同步**：Worker 进度写入 Redis Hash，主服务轮询后推送 WebSocket，跨进程实时进度
+- **自动降级**：启动时 ping Redis，不可达则自动降级为内存队列，不影响单机模式
+
+### 代理
+
 - **默认直连**：国内网络直连 B站 最稳定，配合多 Cookie + 渐进延迟
 - **可选 PROXY_LIST**：支持自定义代理列表（逗号分隔的 URL），自动轮换
 

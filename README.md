@@ -42,5 +42,7 @@ uv run python run.py
 | `PROXY_LIST` | (空) | 代理 URL 列表，逗号分隔；留空则直连 |
 | `COOKIE_DIR` | data/cookies/ | Cookie 存储目录 |
 | `DATABASE_URL` | sqlite:///data/dynacrawl.db | 数据库 |
+| `USE_REDIS` | false | 启用 Redis 分布式队列；`--worker` 启动消费者 |
+| `REDIS_URL` | redis://localhost:6379/0 | Redis 连接地址 |
 
 全部配置见 `backend/config.py`，架构详情见 `AGENTS.md`。
