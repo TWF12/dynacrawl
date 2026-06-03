@@ -69,11 +69,9 @@ const app = createApp({
 
         async function viewTask(task) {
             selectedTask.value = task;
-            wsProgress.percent = task.total_urls > 0 ? Math.round(task.completed_urls / task.total_urls * 100) : 0;
-            wsProgress.message = "";
-            wsProgress.videoCurrent = 0;
-            wsProgress.videoTotal = 0;
-            wsProgress.videoPercent = 0;
+            if (task.total_urls > 0) {
+                wsProgress.percent = Math.round(task.completed_urls / task.total_urls * 100);
+            }
             Object.assign(taskDetail, { task: null, url_records: [], up_infos: [], video_infos: [], comments: [] });
             try {
                 const res = await axios.get("/api/tasks/" + task.id + "/results");

@@ -217,7 +217,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.get("/")
 async def root():
-    return FileResponse(str(frontend_dir / "index.html"))
+    return FileResponse(
+        str(frontend_dir / "index.html"), media_type="text/html; charset=utf-8"
+    )
 
 
 @app.get("/api/health")
