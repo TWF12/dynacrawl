@@ -128,6 +128,8 @@ async def lifespan(app: FastAPI):
                                 int(data.get(b"total", 0)),
                                 int(data.get(b"failed", 0)),
                                 data.get(b"message", b"").decode(),
+                                video_current=int(data.get(b"video_current", 0)),
+                                video_total=int(data.get(b"video_total", 0)),
                             )
                     await _redis.delete(*keys)  # 已推送的清理
                 except Exception:

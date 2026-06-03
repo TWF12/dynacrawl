@@ -52,7 +52,10 @@ ProgressCallback = Callable[[str, int, int, int, str], Awaitable[None]]
 EnqueueCallback = Callable[[str, dict], Awaitable[None]]
 
 
-async def _redis_progress(task_id: str, completed: int, total: int, failed: int, message: str):
+async def _redis_progress(
+    task_id: str, completed: int, total: int, failed: int, message: str,
+    video_current: int = 0, video_total: int = 0,
+):
     """Redis 模式进度共享: 写入 Hash, 供主服务轮询后推 WebSocket"""
     try:
         import redis.asyncio as aioredis
@@ -65,12 +68,14 @@ async def _redis_progress(task_id: str, completed: int, total: int, failed: int,
                 "total": str(total),
                 "failed": str(failed),
                 "message": message,
+                "video_current": str(video_current),
+                "video_total": str(video_total),
             },
         )
-        await r.expire(f"dynacrawl:progress:{task_id}", 300)  # 5分钟TTL
+        await r.expire(f"dynacrawl:progress:{task_id}", 300)
         await r.aclose()
     except Exception:
-        pass  # Redis不可达时静默跳过, 不影响主流程
+        pass
 
 
 async def process_url_message(
@@ -92,7 +97,7 @@ async def process_url_message(
         ):
             if _orig_cb:
                 await _orig_cb(tid, completed, total, failed, message, **kwargs)
-            await _redis_progress(tid, completed, total, failed, message)
+            await _redis_progress(tid, completed, total, failed, message, **kwargs)
 
         progress_callback = _redis_wrapped_cb
     url_id = msg["url_id"]
